@@ -4,7 +4,7 @@ import { Card } from '../components/common/Card';
 import { Modal } from '../components/common/Modal';
 import { SkeletonLoader } from '../components/common/SkeletonLoader';
 import { alertsService } from '../services/alertsService';
-import { Alert, AlertSeverity, AlertStatus } from '../types/alert';
+import { Alert, AlertSeverity } from '../types/alert';
 import { getSeverityBadge, getAlertStatusBadge, formatTimestamp } from '../utils/formatters';
 import { Bell, ShieldAlert, CheckCircle2, AlertOctagon, XCircle, FileText } from 'lucide-react';
 
@@ -18,8 +18,8 @@ export const AlertsPage: React.FC = () => {
     async function loadAlerts() {
       setLoading(true);
       try {
-        const data = await alertsService.getAlerts();
-        setAlerts(data);
+        const res = await alertsService.getAlerts();
+        setAlerts(res.data);
       } catch (err) {
         console.error(err);
       } finally {
@@ -31,8 +31,8 @@ export const AlertsPage: React.FC = () => {
 
   const handleAcknowledge = async (id: string) => {
     try {
-      const updated = await alertsService.acknowledgeAlert(id);
-      setAlerts(alerts.map(a => a.id === id ? updated : a));
+      const res = await alertsService.acknowledgeAlert(id);
+      setAlerts(alerts.map(a => a.id === id ? res.data : a));
     } catch (err) {
       console.error(err);
     }
@@ -40,8 +40,8 @@ export const AlertsPage: React.FC = () => {
 
   const handleResolve = async (id: string) => {
     try {
-      const updated = await alertsService.resolveAlert(id, 'Resolved via Control Room Operator Panel');
-      setAlerts(alerts.map(a => a.id === id ? updated : a));
+      const res = await alertsService.resolveAlert(id, 'Resolved via Control Room Operator Panel');
+      setAlerts(alerts.map(a => a.id === id ? res.data : a));
     } catch (err) {
       console.error(err);
     }
@@ -49,8 +49,8 @@ export const AlertsPage: React.FC = () => {
 
   const handleDismiss = async (id: string) => {
     try {
-      const updated = await alertsService.dismissAlert(id);
-      setAlerts(alerts.map(a => a.id === id ? updated : a));
+      const res = await alertsService.dismissAlert(id);
+      setAlerts(alerts.map(a => a.id === id ? res.data : a));
     } catch (err) {
       console.error(err);
     }

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { PageHeader } from '../components/common/PageHeader';
 import { MetricCard } from '../components/dashboard/MetricCard';
 import { RecentEventsList } from '../components/dashboard/RecentEventsList';
@@ -8,10 +8,12 @@ import { Card } from '../components/common/Card';
 import { Modal } from '../components/common/Modal';
 import { SkeletonLoader } from '../components/common/SkeletonLoader';
 import { ErrorState } from '../components/common/ErrorState';
+import { EmptyState } from '../components/common/EmptyState';
 
 import { analyticsService } from '../services/analyticsService';
 import { camerasService } from '../services/camerasService';
 import { eventsService } from '../services/eventsService';
+import { usePolling } from '../hooks/usePolling';
 
 import { DashboardStatistics, HourlyDetectionTrend } from '../types/analytics';
 import { Camera } from '../types/camera';
@@ -37,31 +39,33 @@ export const DashboardPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
 
-  const fetchDashboardData = async () => {
-    setLoading(true);
-    setError(null);
+  const fetchDashboardData = useCallback(async () => {
     try {
-      const [statsData, camerasData, eventsData, trendsData] = await Promise.all([
+      setError(null);
+      const [statsRes, camerasRes, eventsRes, trendsRes] = await Promise.all([
         analyticsService.getDashboardStats(),
         camerasService.getCameras(),
         eventsService.getEvents(),
         analyticsService.getHourlyTrends(),
       ]);
-      setStats(statsData);
-      setCameras(camerasData);
-      setEvents(eventsData);
-      setTrends(trendsData);
+      setStats(statsRes.data);
+      setCameras(camerasRes.data);
+      setEvents(eventsRes.data);
+      setTrends(trendsRes.data);
     } catch (err: unknown) {
       const errorObj = err as Error;
-      setError(errorObj.message || 'Failed to load surveillance dashboard data.');
+      setError(errorObj.message || 'Unable to communicate with IBVAP FastAPI Backend');
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     fetchDashboardData();
-  }, []);
+  }, [fetchDashboardData]);
+
+  // Periodic polling every 10 seconds for live operations
+  usePolling(fetchDashboardData, 10000);
 
   if (loading) {
     return (
@@ -72,11 +76,11 @@ export const DashboardPage: React.FC = () => {
     );
   }
 
-  if (error) {
+  if (error && !stats) {
     return (
       <div className="py-8">
         <ErrorState
-          title="Dashboard Connection Notice"
+          title="Dashboard Connection Warning"
           message={error}
           onRetry={fetchDashboardData}
         />
@@ -84,7 +88,7 @@ export const DashboardPage: React.FC = () => {
     );
   }
 
-  if (!stats) return null;
+  if (!stats) return <EmptyState title="No Dashboard Analytics Available" description="No cameras or detection stats returned from backend." />;
 
   return (
     <div className="space-y-6 animate-fadeIn">
@@ -109,7 +113,7 @@ export const DashboardPage: React.FC = () => {
         <MetricCard
           title="Active Cameras"
           value={`${stats.active_cameras}/${stats.total_cameras}`}
-          subtitle="Streams live"
+          subtitle="Streams broadcasting"
           trend="100% Signal"
           trendType="positive"
           accentColor="cyan"
@@ -149,7 +153,7 @@ export const DashboardPage: React.FC = () => {
         <MetricCard
           title="Vehicles Detected"
           value={stats.vehicles_detected_today.toLocaleString()}
-          subtitle="ANPR & YOLO vehicle count"
+          subtitle="ANPR & YOLO count"
           trend="63% of total"
           trendType="positive"
           accentColor="cyan"

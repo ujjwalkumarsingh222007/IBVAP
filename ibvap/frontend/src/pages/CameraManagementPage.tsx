@@ -23,8 +23,8 @@ export const CameraManagementPage: React.FC = () => {
     async function loadCameras() {
       setLoading(true);
       try {
-        const data = await camerasService.getCameras();
-        setCameras(data);
+        const res = await camerasService.getCameras();
+        setCameras(res.data);
       } catch (err) {
         console.error(err);
       } finally {
@@ -37,11 +37,11 @@ export const CameraManagementPage: React.FC = () => {
   const handleSaveCamera = async (data: Partial<Camera>) => {
     try {
       if (editingCamera) {
-        const updated = await camerasService.updateCamera(editingCamera.id, data);
-        setCameras(cameras.map(c => c.id === editingCamera.id ? updated : c));
+        const res = await camerasService.updateCamera(editingCamera.id, data);
+        setCameras(cameras.map(c => c.id === editingCamera.id ? res.data : c));
       } else {
-        const created = await camerasService.addCamera(data as any);
-        setCameras([created, ...cameras]);
+        const res = await camerasService.addCamera(data as any);
+        setCameras([res.data, ...cameras]);
       }
       setIsFormModalOpen(false);
       setEditingCamera(null);
@@ -52,8 +52,8 @@ export const CameraManagementPage: React.FC = () => {
 
   const handleToggleStatus = async (id: string) => {
     try {
-      const updated = await camerasService.toggleCameraStatus(id);
-      setCameras(cameras.map(c => c.id === id ? updated : c));
+      const res = await camerasService.toggleCameraStatus(id);
+      setCameras(cameras.map(c => c.id === id ? res.data : c));
     } catch (err) {
       console.error(err);
     }

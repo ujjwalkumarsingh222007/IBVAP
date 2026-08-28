@@ -1,10 +1,19 @@
-import React, { useState } from 'react';
-import { Bell, ShieldCheck, User, Wifi, ChevronDown } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Bell, ShieldCheck, User, Wifi, ChevronDown, Database, Server } from 'lucide-react';
 import { MOCK_ALERTS } from '../../data/mockData';
+import { subscribeConnectivity, API_BASE_URL } from '../../services/apiClient';
 
 export const Header: React.FC = () => {
   const [showNotifications, setShowNotifications] = useState(false);
+  const [isLiveBackend, setIsLiveBackend] = useState(false);
   const unreadAlerts = MOCK_ALERTS.filter(a => a.status === 'UNACKNOWLEDGED');
+
+  useEffect(() => {
+    const unsubscribe = subscribeConnectivity((online) => {
+      setIsLiveBackend(online);
+    });
+    return () => unsubscribe();
+  }, []);
 
   return (
     <header className="h-16 bg-[#0d121d]/90 backdrop-blur border-b border-[#1f293d] px-6 flex items-center justify-between sticky top-0 z-20">
@@ -17,21 +26,32 @@ export const Header: React.FC = () => {
           <p className="text-[11px] text-slate-400">SIH Surveillance & AI Vision Node</p>
         </div>
 
-        <div className="hidden md:flex items-center gap-2 px-3 py-1 bg-emerald-500/10 border border-emerald-500/30 rounded-full text-xs text-emerald-400">
-          <span className="relative flex h-2 w-2">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
-          </span>
-          <span className="font-mono text-[11px] font-medium">4/4 Camera Nodes Active</span>
+        {/* Backend Environment Connectivity Status Badge */}
+        <div className="hidden md:flex items-center gap-2">
+          {isLiveBackend ? (
+            <div className="flex items-center gap-1.5 px-3 py-1 bg-emerald-500/10 border border-emerald-500/30 rounded-full text-xs text-emerald-400 font-mono">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+              </span>
+              <Server size={12} />
+              <span>LIVE BACKEND (FastAPI)</span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5 px-3 py-1 bg-amber-500/10 border border-amber-500/30 rounded-full text-xs text-amber-400 font-mono" title={`Fallback active: ${API_BASE_URL} unreachable`}>
+              <Database size={12} />
+              <span>DEMO DATA</span>
+            </div>
+          )}
         </div>
       </div>
 
       {/* Right Controls */}
       <div className="flex items-center gap-4">
-        {/* Backend API Status Pill */}
+        {/* API Base URL display */}
         <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-slate-900 border border-slate-800 rounded-lg text-xs text-slate-300 font-mono">
-          <Wifi size={13} className="text-cyan-400" />
-          <span className="text-[11px]">API: http://localhost:8000</span>
+          <Wifi size={13} className={isLiveBackend ? 'text-emerald-400' : 'text-amber-400'} />
+          <span className="text-[11px] text-slate-400 max-w-[180px] truncate">{API_BASE_URL}</span>
         </div>
 
         {/* Notifications Dropdown Button */}

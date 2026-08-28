@@ -1,4 +1,4 @@
-# IBVAP — Member 4 Frontend Phase 2 Implementation
+# IBVAP — Member 4 Frontend Phase 3 Integration & Reliability
 
 This directory (`frontend/`) contains the React + Vite + TypeScript surveillance dashboard application for **IBVAP (Intelligent Border Video Analytics Platform)**.
 
@@ -16,153 +16,113 @@ This directory (`frontend/`) contains the React + Vite + TypeScript surveillance
 
 ---
 
-## 🚀 Phase 2 Features Implemented
+## 📡 Phase 3 API Integration Architecture
 
-1. **Enhanced Dashboard (`/dashboard`)**:
-   - 6 key metric cards: Active Cameras, Total Detections, Active Alerts, Watchlist Matches, Vehicles Detected, Persons Detected.
-   - Interactive camera status cards with last activity timestamps.
-   - Live recent event stream following the Common Event Contract.
-   - Recharts visual charts for hourly detection trends and event distribution.
+The Phase 3 frontend architecture establishes a reliable, decoupled connection to Member 3's FastAPI REST API:
 
-2. **Live Camera Monitoring Wall & Inspector (`/cameras`)**:
-   - Stream cards displaying camera ID, name, status, FPS, resolution, location, last hit timestamp, and hit count.
-   - Interactive `CameraDetailModal` stream inspector with simulated video preview and masked RTSP credentials.
+```text
+FastAPI Backend (http://localhost:8000/api/v1)
+       ↓
+Centralized API Client (src/services/apiClient.ts)
+       ↓ (Network Error Fallback) ──→ Isolated Mock Dataset (src/data/mockData.ts)
+Data Mapper Layer (src/utils/mappers.ts)
+       ↓
+Services (src/services/*)
+       ↓
+Custom Hooks (src/hooks/useApiData.ts & usePolling.ts)
+       ↓
+React Pages & UI Components
+```
 
-3. **Surveillance Events Registry (`/events`)**:
-   - Search bar across camera IDs, license plates, and event details.
-   - Event type tabs & camera drop-down filters.
-   - Raw JSON payload contract modal inspector.
-
-4. **Alerts & Threat Feed (`/alerts`)**:
-   - Interactive severity feed (`CRITICAL`, `HIGH`, `MEDIUM`, `LOW`).
-   - Operator actions: **Acknowledge**, **Mark Resolved**, **Dismiss**, and **View Alert Details**.
-
-5. **Computer Vision Detections Feed (`/detections`)**:
-   - Tracking ID tags (`TRK-xxxx`), bounding box coordinates, confidence badges, and object class filters (`person`, `vehicle`, `car`, `truck`, `motorcycle`, `license_plate`).
-
-6. **Target Watchlist Management (`/watchlist`)**:
-   - Complete CRUD UI: Search bar, priority filter, Add Target modal, Edit Target modal, Delete confirmation dialog (`ConfirmModal`), and hit count tracking.
-
-7. **Analytics Dashboard (`/analytics`)**:
-   - Recharts graphs: Detections Over Time, Event Type distribution pie chart, Camera Event Breakdown bar chart, and Alert Severity distribution bar chart.
-
-8. **Camera Stream Management Hub (`/camera-management`)**:
-   - Complete CRUD UI: Search bar, Add Camera modal, Edit Camera modal, Delete Camera confirmation dialog, Enable/Disable stream toggle, and credential masking.
+### Key API Integration & Reliability Features:
+1. **Configurable Base URL**: Configured via `VITE_API_BASE_URL` in `frontend/.env.example` (default: `http://localhost:8000/api/v1`).
+2. **Data Mappers (`src/utils/mappers.ts`)**: Prevents UI crashes by converting snake_case or variant API fields safely into UI contracts.
+3. **Environment Status Badge**:
+   - Displays **`LIVE BACKEND (FastAPI)`** with a green pulse when the FastAPI server responds.
+   - Displays **`DEMO DATA`** with an amber indicator when running on development mock fallback.
+4. **Periodic Polling (`src/hooks/usePolling.ts`)**: Automatically polls API endpoints every 10 seconds with timer cleanup on unmount to prevent memory leaks.
+5. **Masked RTSP Credentials**: Masks passwords inside camera stream URLs (`rtsp://admin:****@192.168.10.101:554/live`).
 
 ---
 
-## 📁 Folder Structure
+## 🔌 API Endpoints Supported
+
+| Endpoint | Method | Service Method | Description |
+|---|---|---|---|
+| `/api/v1/events` | GET | `eventsService.getEvents(filters)` | Fetch event stream (Common Event Contract) |
+| `/api/v1/events` | POST | `eventsService.createEvent(payload)` | Publish new event payload |
+| `/api/v1/cameras` | GET | `camerasService.getCameras()` | Fetch registered CCTV/RTSP camera feeds |
+| `/api/v1/cameras` | POST | `camerasService.addCamera(input)` | Register new RTSP stream |
+| `/api/v1/cameras/:id` | PATCH | `camerasService.updateCamera(id, input)` | Update stream properties / status |
+| `/api/v1/cameras/:id` | DELETE | `camerasService.deleteCamera(id)` | Unregister camera stream |
+| `/api/v1/alerts` | GET | `alertsService.getAlerts()` | Fetch security threat warnings |
+| `/api/v1/alerts/:id/acknowledge` | PATCH | `alertsService.acknowledgeAlert(id)` | Acknowledge alert status |
+| `/api/v1/alerts/:id/resolve` | PATCH | `alertsService.resolveAlert(id, notes)` | Resolve alert status |
+| `/api/v1/alerts/:id/dismiss` | PATCH | `alertsService.dismissAlert(id)` | Dismiss alert |
+| `/api/v1/detections` | GET | `detectionsService.getDetections()` | Fetch YOLO object detection logs |
+| `/api/v1/watchlist` | GET | `watchlistService.getWatchlist()` | Fetch ANPR license plate & POI watchlist |
+| `/api/v1/watchlist` | POST | `watchlistService.addWatchlistEntry(input)` | Add target to watchlist |
+| `/api/v1/watchlist/:id` | PATCH | `watchlistService.updateWatchlistEntry(id, input)` | Update watchlist target |
+| `/api/v1/watchlist/:id` | DELETE | `watchlistService.deleteWatchlistEntry(id)` | Remove watchlist target |
+
+---
+
+## 📁 Project Structure
 
 ```text
 frontend/
+├── .env.example                  # Environment configuration example
 ├── public/
-│   └── favicon.svg               # Platform favicon
+│   └── favicon.svg
 ├── src/
-│   ├── components/
+│   ├── components/               # Modular UI components
 │   │   ├── camera-management/
-│   │   │   └── CameraFormModal.tsx # Add / Edit camera stream modal
 │   │   ├── cameras/
-│   │   │   └── CameraDetailModal.tsx # Stream inspection modal
-│   │   ├── common/               # Reusable UI states & controls
-│   │   │   ├── Card.tsx
-│   │   │   ├── ConfirmModal.tsx  # Confirmation dialog for destructive actions
-│   │   │   ├── EmptyState.tsx
-│   │   │   ├── ErrorState.tsx
-│   │   │   ├── LoadingSpinner.tsx
-│   │   │   ├── Modal.tsx
-│   │   │   ├── PageHeader.tsx
-│   │   │   ├── SkeletonLoader.tsx # Loading skeleton
-│   │   │   └── StatusBadge.tsx
-│   │   ├── dashboard/            # Dashboard specific widgets
-│   │   ├── layout/               # Header & Sidebar
+│   │   ├── common/
+│   │   ├── dashboard/
+│   │   ├── layout/
+│   │   │   └── Header.tsx        # Live / Demo Data status badge
 │   │   └── watchlist/
-│   │       └── WatchlistModal.tsx # Add / Edit watchlist modal
 │   ├── data/
-│   │   └── mockData.ts           # Isolated UI demonstration mock dataset
-│   ├── layouts/
-│   │   └── AppLayout.tsx         # Main layout container
+│   │   └── mockData.ts           # Development mock dataset
+│   ├── hooks/
+│   │   ├── useApiData.ts         # Centralized state & data hook
+│   │   └── usePolling.ts         # Periodic refresh hook with timer cleanup
 │   ├── pages/                    # 8 Application route views
-│   │   ├── AlertsPage.tsx
-│   │   ├── AnalyticsPage.tsx
-│   │   ├── CameraManagementPage.tsx
-│   │   ├── CamerasPage.tsx
-│   │   ├── DashboardPage.tsx
-│   │   ├── DetectionsPage.tsx
-│   │   ├── EventsPage.tsx
-│   │   ├── NotFoundPage.tsx
-│   │   └── WatchlistPage.tsx
-│   ├── services/                 # Decoupled API service layer
-│   │   ├── alertsService.ts
+│   ├── services/                 # Service layer & API client
+│   │   ├── alertService.ts
 │   │   ├── analyticsService.ts
-│   │   ├── api.ts                # Base fetch wrapper
-│   │   ├── camerasService.ts
-│   │   ├── detectionsService.ts
-│   │   ├── eventsService.ts
+│   │   ├── api.ts
+│   │   ├── apiClient.ts          # Centralized fetch wrapper & status tracking
+│   │   ├── cameraService.ts
+│   │   ├── detectionService.ts
+│   │   ├── eventService.ts
 │   │   └── watchlistService.ts
 │   ├── types/                    # TypeScript interfaces
-│   │   ├── alert.ts
-│   │   ├── analytics.ts
-│   │   ├── api.ts
-│   │   ├── camera.ts
-│   │   ├── detection.ts
-│   │   ├── event.ts              # Common Event Contract
-│   │   └── watchlist.ts
 │   ├── utils/
-│   │   └── formatters.ts         # Formatting helpers
-│   ├── App.tsx                   # React Router definition
-│   ├── index.css                 # Main stylesheet with Tailwind
-│   ├── main.tsx                  # React DOM entry point
-│   └── vite-env.d.ts
-├── index.html
+│   │   ├── formatters.ts
+│   │   └── mappers.ts            # Response payload mappers
+│   ├── App.tsx
+│   ├── index.css
+│   └── main.tsx
 ├── package.json
-├── postcss.config.js
 ├── tailwind.config.js
 ├── tsconfig.json
-├── tsconfig.node.json
 └── vite.config.ts
 ```
 
 ---
 
-## 💻 How to Run the Frontend
+## 💻 Running the Application
 
-### 1. Install Dependencies
 ```bash
+# 1. Install dependencies
 npm install
-```
 
-### 2. Start Vite Development Server
-```bash
+# 2. Start Vite dev server
 npm run dev
-```
-Access at: `http://localhost:3000`
 
-### 3. Type Checking & Production Build
-```bash
+# 3. Type check & production build
 npx tsc --noEmit
 npm run build
-```
-
----
-
-## 📡 Backend Integration & API Services
-
-The service layer in `src/services/` targets Member 3's FastAPI backend endpoints:
-- Base API URL: `import.meta.env.VITE_API_BASE_URL` (default: `http://localhost:8000/api/v1`)
-- Endpoints:
-  - `GET /api/v1/events`, `POST /api/v1/events`
-  - `GET /api/v1/cameras`, `POST /api/v1/cameras`, `PATCH /api/v1/cameras/:id`, `DELETE /api/v1/cameras/:id`
-  - `GET /api/v1/alerts`, `PATCH /api/v1/alerts/:id/acknowledge`, `PATCH /api/v1/alerts/:id/resolve`, `PATCH /api/v1/alerts/:id/dismiss`
-  - `GET /api/v1/detections`
-  - `GET /api/v1/watchlist`, `POST /api/v1/watchlist`, `PATCH /api/v1/watchlist/:id`, `DELETE /api/v1/watchlist/:id`
-
-### Common Event Contract
-```json
-{
-  "camera_id": "CAM-01",
-  "event_type": "OBJECT_DETECTED",
-  "timestamp": "2026-08-28T15:30:00",
-  "confidence": 0.94,
-  "metadata": {}
-}
 ```

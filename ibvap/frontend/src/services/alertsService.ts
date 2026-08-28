@@ -1,6 +1,7 @@
-import { apiFetch } from './api';
+import { apiClient } from './apiClient';
 import { Alert } from '../types/alert';
 import { MOCK_ALERTS } from '../data/mockData';
+import { mapApiAlertToAlert } from '../utils/mappers';
 
 let inMemoryAlerts = [...MOCK_ALERTS];
 
@@ -8,25 +9,26 @@ export const alertsService = {
   /**
    * Fetch active surveillance alerts GET /api/v1/alerts
    */
-  async getAlerts(): Promise<Alert[]> {
+  async getAlerts(): Promise<{ data: Alert[]; isLive: boolean }> {
     try {
-      return await apiFetch<Alert[]>('/alerts');
+      const { data, isLive } = await apiClient.get<unknown[]>('/alerts');
+      const mappedAlerts = Array.isArray(data) ? data.map(mapApiAlertToAlert) : [];
+      return { data: mappedAlerts, isLive };
     } catch (error) {
-      console.warn('[IBVAP API] Backend unreachable for /api/v1/alerts. Using fallback UI mock data.', error);
-      return inMemoryAlerts;
+      console.warn('[IBVAP API Service] Backend unreachable for GET /api/v1/alerts. Using mock development fallback.', error);
+      return { data: inMemoryAlerts, isLive: false };
     }
   },
 
   /**
-   * Acknowledge alert status PATCH /api/v1/alerts/:id/acknowledge
+   * Acknowledge alert status
    */
-  async acknowledgeAlert(id: string): Promise<Alert> {
+  async acknowledgeAlert(id: string): Promise<{ data: Alert; isLive: boolean }> {
     try {
-      return await apiFetch<Alert>(`/alerts/${id}/acknowledge`, {
-        method: 'PATCH',
-      });
+      const { data, isLive } = await apiClient.patch<Record<string, any>>(`/alerts/${id}/acknowledge`);
+      return { data: mapApiAlertToAlert(data), isLive };
     } catch (error) {
-      console.warn(`[IBVAP API] Backend unreachable for alert ack ${id}.`, error);
+      console.warn(`[IBVAP API Service] Backend unreachable for alert ack ${id}. Local state updated.`, error);
       inMemoryAlerts = inMemoryAlerts.map(a =>
         a.id === id
           ? {
@@ -37,21 +39,19 @@ export const alertsService = {
             }
           : a
       );
-      return inMemoryAlerts.find(a => a.id === id)!;
+      return { data: inMemoryAlerts.find(a => a.id === id)!, isLive: false };
     }
   },
 
   /**
-   * Resolve alert status PATCH /api/v1/alerts/:id/resolve
+   * Resolve alert status
    */
-  async resolveAlert(id: string, notes?: string): Promise<Alert> {
+  async resolveAlert(id: string, notes?: string): Promise<{ data: Alert; isLive: boolean }> {
     try {
-      return await apiFetch<Alert>(`/alerts/${id}/resolve`, {
-        method: 'PATCH',
-        body: JSON.stringify({ resolution_notes: notes }),
-      });
+      const { data, isLive } = await apiClient.patch<Record<string, any>>(`/alerts/${id}/resolve`, { resolution_notes: notes });
+      return { data: mapApiAlertToAlert(data), isLive };
     } catch (error) {
-      console.warn(`[IBVAP API] Backend unreachable for alert resolve ${id}.`, error);
+      console.warn(`[IBVAP API Service] Backend unreachable for alert resolve ${id}.`, error);
       inMemoryAlerts = inMemoryAlerts.map(a =>
         a.id === id
           ? {
@@ -59,28 +59,27 @@ export const alertsService = {
               status: 'RESOLVED',
               resolved_by: 'Officer J. Miller',
               resolved_at: new Date().toISOString(),
-              resolution_notes: notes || 'Threat resolved by sector patrol.',
+              resolution_notes: notes || 'Resolved via Control Room Operator Panel.',
             }
           : a
       );
-      return inMemoryAlerts.find(a => a.id === id)!;
+      return { data: inMemoryAlerts.find(a => a.id === id)!, isLive: false };
     }
   },
 
   /**
-   * Dismiss alert status PATCH /api/v1/alerts/:id/dismiss
+   * Dismiss alert status
    */
-  async dismissAlert(id: string): Promise<Alert> {
+  async dismissAlert(id: string): Promise<{ data: Alert; isLive: boolean }> {
     try {
-      return await apiFetch<Alert>(`/alerts/${id}/dismiss`, {
-        method: 'PATCH',
-      });
+      const { data, isLive } = await apiClient.patch<Record<string, any>>(`/alerts/${id}/dismiss`);
+      return { data: mapApiAlertToAlert(data), isLive };
     } catch (error) {
-      console.warn(`[IBVAP API] Backend unreachable for alert dismiss ${id}.`, error);
+      console.warn(`[IBVAP API Service] Backend unreachable for alert dismiss ${id}.`, error);
       inMemoryAlerts = inMemoryAlerts.map(a =>
         a.id === id ? { ...a, status: 'DISMISSED' } : a
       );
-      return inMemoryAlerts.find(a => a.id === id)!;
+      return { data: inMemoryAlerts.find(a => a.id === id)!, isLive: false };
     }
   },
 };

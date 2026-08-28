@@ -5,7 +5,7 @@ import { SkeletonLoader } from '../components/common/SkeletonLoader';
 import { detectionsService } from '../services/detectionsService';
 import { Detection, ObjectCategory } from '../types/detection';
 import { formatTimestamp, formatConfidence } from '../utils/formatters';
-import { Search, Scan, Tag, Filter, ShieldCheck, Car, User, Truck } from 'lucide-react';
+import { Search, Scan, Filter, Car, User, Truck } from 'lucide-react';
 
 export const DetectionsPage: React.FC = () => {
   const [detections, setDetections] = useState<Detection[]>([]);
@@ -16,8 +16,8 @@ export const DetectionsPage: React.FC = () => {
     async function loadDetections() {
       setLoading(true);
       try {
-        const data = await detectionsService.getDetections();
-        setDetections(data);
+        const res = await detectionsService.getDetections();
+        setDetections(res.data);
       } catch (err) {
         console.error(err);
       } finally {

@@ -7,7 +7,7 @@ import { CameraDetailModal } from '../components/cameras/CameraDetailModal';
 
 import { camerasService } from '../services/camerasService';
 import { Camera } from '../types/camera';
-import { Video, Maximize2, Cpu, Activity, MapPin } from 'lucide-react';
+import { Video, Maximize2, Cpu, Activity } from 'lucide-react';
 
 export const CamerasPage: React.FC = () => {
   const [cameras, setCameras] = useState<Camera[]>([]);
@@ -19,8 +19,8 @@ export const CamerasPage: React.FC = () => {
     async function loadCameras() {
       setLoading(true);
       try {
-        const data = await camerasService.getCameras();
-        setCameras(data);
+        const res = await camerasService.getCameras();
+        setCameras(res.data);
       } catch (err) {
         console.error(err);
       } finally {

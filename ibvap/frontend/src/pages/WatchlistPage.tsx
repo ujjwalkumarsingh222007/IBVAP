@@ -5,8 +5,7 @@ import { SkeletonLoader } from '../components/common/SkeletonLoader';
 import { WatchlistModal } from '../components/watchlist/WatchlistModal';
 import { ConfirmModal } from '../components/common/ConfirmModal';
 import { watchlistService } from '../services/watchlistService';
-import { WatchlistEntry, PriorityLevel } from '../types/watchlist';
-import { formatTimestamp } from '../utils/formatters';
+import { WatchlistEntry } from '../types/watchlist';
 import { ShieldAlert, Plus, Car, User, Edit, Trash2, Search, Filter } from 'lucide-react';
 
 export const WatchlistPage: React.FC = () => {
@@ -24,8 +23,8 @@ export const WatchlistPage: React.FC = () => {
     async function loadWatchlist() {
       setLoading(true);
       try {
-        const data = await watchlistService.getWatchlist();
-        setWatchlist(data);
+        const res = await watchlistService.getWatchlist();
+        setWatchlist(res.data);
       } catch (err) {
         console.error(err);
       } finally {
@@ -38,11 +37,11 @@ export const WatchlistPage: React.FC = () => {
   const handleSaveTarget = async (data: Partial<WatchlistEntry>) => {
     try {
       if (editingTarget) {
-        const updated = await watchlistService.updateWatchlistEntry(editingTarget.id, data);
-        setWatchlist(watchlist.map(w => w.id === editingTarget.id ? updated : w));
+        const res = await watchlistService.updateWatchlistEntry(editingTarget.id, data);
+        setWatchlist(watchlist.map(w => w.id === editingTarget.id ? res.data : w));
       } else {
-        const created = await watchlistService.addWatchlistEntry(data as any);
-        setWatchlist([created, ...watchlist]);
+        const res = await watchlistService.addWatchlistEntry(data as any);
+        setWatchlist([res.data, ...watchlist]);
       }
       setIsModalOpen(false);
       setEditingTarget(null);

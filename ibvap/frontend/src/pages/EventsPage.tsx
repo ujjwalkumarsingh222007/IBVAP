@@ -6,7 +6,7 @@ import { SkeletonLoader } from '../components/common/SkeletonLoader';
 import { eventsService } from '../services/eventsService';
 import { Event, EventType } from '../types/event';
 import { formatTimestamp, formatConfidence, getEventTypeBadge } from '../utils/formatters';
-import { Activity, Filter, Eye, Code, Search } from 'lucide-react';
+import { Activity, Filter, Code, Search } from 'lucide-react';
 
 export const EventsPage: React.FC = () => {
   const [events, setEvents] = useState<Event[]>([]);
@@ -20,11 +20,11 @@ export const EventsPage: React.FC = () => {
     async function loadEvents() {
       setLoading(true);
       try {
-        const data = await eventsService.getEvents({
+        const res = await eventsService.getEvents({
           event_type: selectedType,
           camera_id: selectedCamera,
         });
-        setEvents(data);
+        setEvents(res.data);
       } catch (err) {
         console.error(err);
       } finally {

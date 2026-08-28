@@ -1,6 +1,7 @@
-import { apiFetch } from './api';
+import { apiClient } from './apiClient';
 import { WatchlistEntry, CreateWatchlistInput, UpdateWatchlistInput } from '../types/watchlist';
 import { MOCK_WATCHLIST } from '../data/mockData';
+import { mapApiWatchlistToWatchlistEntry } from '../utils/mappers';
 
 let inMemoryWatchlist = [...MOCK_WATCHLIST];
 
@@ -8,26 +9,26 @@ export const watchlistService = {
   /**
    * Fetch border watchlist registry GET /api/v1/watchlist
    */
-  async getWatchlist(): Promise<WatchlistEntry[]> {
+  async getWatchlist(): Promise<{ data: WatchlistEntry[]; isLive: boolean }> {
     try {
-      return await apiFetch<WatchlistEntry[]>('/watchlist');
+      const { data, isLive } = await apiClient.get<unknown[]>('/watchlist');
+      const mappedEntries = Array.isArray(data) ? data.map(mapApiWatchlistToWatchlistEntry) : [];
+      return { data: mappedEntries, isLive };
     } catch (error) {
-      console.warn('[IBVAP API] Backend unreachable for /api/v1/watchlist. Using fallback UI mock data.', error);
-      return inMemoryWatchlist;
+      console.warn('[IBVAP API Service] Backend unreachable for GET /api/v1/watchlist. Using mock development fallback.', error);
+      return { data: inMemoryWatchlist, isLive: false };
     }
   },
 
   /**
    * Add new watchlist target entry POST /api/v1/watchlist
    */
-  async addWatchlistEntry(input: CreateWatchlistInput): Promise<WatchlistEntry> {
+  async addWatchlistEntry(input: CreateWatchlistInput): Promise<{ data: WatchlistEntry; isLive: boolean }> {
     try {
-      return await apiFetch<WatchlistEntry>('/watchlist', {
-        method: 'POST',
-        body: JSON.stringify(input),
-      });
+      const { data, isLive } = await apiClient.post<Record<string, any>>('/watchlist', input);
+      return { data: mapApiWatchlistToWatchlistEntry(data), isLive };
     } catch (error) {
-      console.warn('[IBVAP API] Backend unreachable for POST /api/v1/watchlist.', error);
+      console.warn('[IBVAP API Service] Backend unreachable for POST /api/v1/watchlist.', error);
       const newEntry: WatchlistEntry = {
         id: `WL-${Math.floor(1000 + Math.random() * 9000)}`,
         category: input.category,
@@ -41,37 +42,36 @@ export const watchlistService = {
         matches_count: 0,
       };
       inMemoryWatchlist = [newEntry, ...inMemoryWatchlist];
-      return newEntry;
+      return { data: newEntry, isLive: false };
     }
   },
 
   /**
-   * Update existing watchlist entry PUT/PATCH /api/v1/watchlist/:id
+   * Update existing watchlist entry PATCH /api/v1/watchlist/:id
    */
-  async updateWatchlistEntry(id: string, input: UpdateWatchlistInput): Promise<WatchlistEntry> {
+  async updateWatchlistEntry(id: string, input: UpdateWatchlistInput): Promise<{ data: WatchlistEntry; isLive: boolean }> {
     try {
-      return await apiFetch<WatchlistEntry>(`/watchlist/${id}`, {
-        method: 'PATCH',
-        body: JSON.stringify(input),
-      });
+      const { data, isLive } = await apiClient.patch<Record<string, any>>(`/watchlist/${id}`, input);
+      return { data: mapApiWatchlistToWatchlistEntry(data), isLive };
     } catch (error) {
-      console.warn(`[IBVAP API] Backend unreachable for PATCH /api/v1/watchlist/${id}.`, error);
+      console.warn(`[IBVAP API Service] Backend unreachable for PATCH /api/v1/watchlist/${id}.`, error);
       inMemoryWatchlist = inMemoryWatchlist.map(w => w.id === id ? { ...w, ...input } : w);
-      return inMemoryWatchlist.find(w => w.id === id)!;
+      const updated = inMemoryWatchlist.find(w => w.id === id)!;
+      return { data: updated, isLive: false };
     }
   },
 
   /**
    * Delete watchlist entry DELETE /api/v1/watchlist/:id
    */
-  async deleteWatchlistEntry(id: string): Promise<boolean> {
+  async deleteWatchlistEntry(id: string): Promise<{ success: boolean; isLive: boolean }> {
     try {
-      await apiFetch<void>(`/watchlist/${id}`, { method: 'DELETE' });
-      return true;
+      await apiClient.del(`/watchlist/${id}`);
+      return { success: true, isLive: true };
     } catch (error) {
-      console.warn(`[IBVAP API] Backend unreachable for DELETE /api/v1/watchlist/${id}.`, error);
+      console.warn(`[IBVAP API Service] Backend unreachable for DELETE /api/v1/watchlist/${id}.`, error);
       inMemoryWatchlist = inMemoryWatchlist.filter(w => w.id !== id);
-      return true;
+      return { success: true, isLive: false };
     }
   },
 };

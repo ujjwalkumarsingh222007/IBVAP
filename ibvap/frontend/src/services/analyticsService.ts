@@ -1,4 +1,4 @@
-import { apiFetch } from './api';
+import { apiClient } from './apiClient';
 import {
   DashboardStatistics,
   HourlyDetectionTrend,
@@ -20,72 +20,74 @@ export const analyticsService = {
   /**
    * Fetch dashboard statistics summary
    */
-  async getDashboardStats(): Promise<DashboardStatistics> {
+  async getDashboardStats(): Promise<{ data: DashboardStatistics; isLive: boolean }> {
     try {
-      return await apiFetch<DashboardStatistics>('/analytics/dashboard');
+      const { data, isLive } = await apiClient.get<DashboardStatistics>('/analytics/dashboard');
+      return { data, isLive };
     } catch (error) {
-      console.warn('[IBVAP API] Backend unreachable for /analytics/dashboard. Using fallback UI mock data.', error);
-      return MOCK_DASHBOARD_STATS;
+      console.warn('[IBVAP API Service] Backend unreachable for /analytics/dashboard. Using mock development fallback.', error);
+      return { data: MOCK_DASHBOARD_STATS, isLive: false };
     }
   },
 
   /**
    * Fetch hourly detection distribution trends
    */
-  async getHourlyTrends(): Promise<HourlyDetectionTrend[]> {
+  async getHourlyTrends(): Promise<{ data: HourlyDetectionTrend[]; isLive: boolean }> {
     try {
-      return await apiFetch<HourlyDetectionTrend[]>('/analytics/hourly');
+      const { data, isLive } = await apiClient.get<HourlyDetectionTrend[]>('/analytics/hourly');
+      return { data: Array.isArray(data) ? data : MOCK_HOURLY_TRENDS, isLive };
     } catch (error) {
-      console.warn('[IBVAP API] Backend unreachable for /analytics/hourly. Using fallback UI mock data.', error);
-      return MOCK_HOURLY_TRENDS;
+      console.warn('[IBVAP API Service] Backend unreachable for /analytics/hourly.', error);
+      return { data: MOCK_HOURLY_TRENDS, isLive: false };
     }
   },
 
   /**
    * Fetch event type distribution pie data
    */
-  async getEventTypeDistribution(): Promise<EventTypeDistribution[]> {
+  async getEventTypeDistribution(): Promise<{ data: EventTypeDistribution[]; isLive: boolean }> {
     try {
-      return await apiFetch<EventTypeDistribution[]>('/analytics/event-types');
+      const { data, isLive } = await apiClient.get<EventTypeDistribution[]>('/analytics/event-types');
+      return { data: Array.isArray(data) ? data : MOCK_EVENT_TYPE_DISTRIBUTION, isLive };
     } catch (error) {
-      console.warn('[IBVAP API] Backend unreachable for /analytics/event-types.', error);
-      return MOCK_EVENT_TYPE_DISTRIBUTION;
+      return { data: MOCK_EVENT_TYPE_DISTRIBUTION, isLive: false };
     }
   },
 
   /**
    * Fetch camera event breakdown bar data
    */
-  async getCameraEventBreakdown(): Promise<CameraEventBreakdown[]> {
+  async getCameraEventBreakdown(): Promise<{ data: CameraEventBreakdown[]; isLive: boolean }> {
     try {
-      return await apiFetch<CameraEventBreakdown[]>('/analytics/camera-breakdown');
+      const { data, isLive } = await apiClient.get<CameraEventBreakdown[]>('/analytics/camera-breakdown');
+      return { data: Array.isArray(data) ? data : MOCK_CAMERA_EVENT_BREAKDOWN, isLive };
     } catch (error) {
-      console.warn('[IBVAP API] Backend unreachable for /analytics/camera-breakdown.', error);
-      return MOCK_CAMERA_EVENT_BREAKDOWN;
+      return { data: MOCK_CAMERA_EVENT_BREAKDOWN, isLive: false };
     }
   },
 
   /**
    * Fetch alert severity distribution data
    */
-  async getAlertSeverityDistribution(): Promise<AlertSeverityDistribution[]> {
+  async getAlertSeverityDistribution(): Promise<{ data: AlertSeverityDistribution[]; isLive: boolean }> {
     try {
-      return await apiFetch<AlertSeverityDistribution[]>('/analytics/alert-severities');
+      const { data, isLive } = await apiClient.get<AlertSeverityDistribution[]>('/analytics/alert-severities');
+      return { data: Array.isArray(data) ? data : MOCK_ALERT_SEVERITY_DISTRIBUTION, isLive };
     } catch (error) {
-      console.warn('[IBVAP API] Backend unreachable for /analytics/alert-severities.', error);
-      return MOCK_ALERT_SEVERITY_DISTRIBUTION;
+      return { data: MOCK_ALERT_SEVERITY_DISTRIBUTION, isLive: false };
     }
   },
 
   /**
    * Fetch threat distribution breakdown
    */
-  async getThreatDistribution(): Promise<ThreatDistribution[]> {
+  async getThreatDistribution(): Promise<{ data: ThreatDistribution[]; isLive: boolean }> {
     try {
-      return await apiFetch<ThreatDistribution[]>('/analytics/threats');
+      const { data, isLive } = await apiClient.get<ThreatDistribution[]>('/analytics/threats');
+      return { data: Array.isArray(data) ? data : MOCK_THREAT_DISTRIBUTION, isLive };
     } catch (error) {
-      console.warn('[IBVAP API] Backend unreachable for /analytics/threats. Using fallback UI mock data.', error);
-      return MOCK_THREAT_DISTRIBUTION;
+      return { data: MOCK_THREAT_DISTRIBUTION, isLive: false };
     }
   },
 };

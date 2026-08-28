@@ -35,16 +35,16 @@ export const AnalyticsPage: React.FC = () => {
     async function loadAnalytics() {
       setLoading(true);
       try {
-        const [trendsData, eventTypesData, cameraData, severitiesData] = await Promise.all([
+        const [trendsRes, eventTypesRes, cameraRes, severitiesRes] = await Promise.all([
           analyticsService.getHourlyTrends(),
           analyticsService.getEventTypeDistribution(),
           analyticsService.getCameraEventBreakdown(),
           analyticsService.getAlertSeverityDistribution(),
         ]);
-        setTrends(trendsData);
-        setEventTypes(eventTypesData);
-        setCameraBreakdown(cameraData);
-        setAlertSeverities(severitiesData);
+        setTrends(trendsRes.data);
+        setEventTypes(eventTypesRes.data);
+        setCameraBreakdown(cameraRes.data);
+        setAlertSeverities(severitiesRes.data);
       } catch (err) {
         console.error(err);
       } finally {
