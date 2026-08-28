@@ -17,7 +17,7 @@ from typing import List, Optional
 @dataclass
 class ANPRConfig:
     """
-    Runtime configuration for the ANPR pipeline.
+    Runtime configuration for the ANPR pipeline and RTSP stream processing.
 
     All values have safe defaults so the module works out-of-the-box
     without any environment setup.
@@ -93,6 +93,32 @@ class ANPRConfig:
     )
     """Window duration (seconds) within which repeated plate detections are suppressed."""
 
+    # --- RTSP / Stream Processing (Phase 5) ---
+    rtsp_url: Optional[str] = field(
+        default_factory=lambda: os.getenv("ANPR_RTSP_URL", None)
+    )
+    """Default RTSP stream URL or video source path."""
+
+    frame_skip: int = field(
+        default_factory=lambda: int(os.getenv("ANPR_FRAME_SKIP", "0"))
+    )
+    """Number of frames to skip between ANPR evaluations (default 0 = process every frame)."""
+
+    reconnect_attempts: int = field(
+        default_factory=lambda: int(os.getenv("ANPR_RECONNECT_ATTEMPTS", "3"))
+    )
+    """Maximum consecutive reconnection attempts on stream drop."""
+
+    reconnect_delay_sec: float = field(
+        default_factory=lambda: float(os.getenv("ANPR_RECONNECT_DELAY_SEC", "2.0"))
+    )
+    """Delay in seconds between reconnection attempts."""
+
+    stream_timeout_sec: float = field(
+        default_factory=lambda: float(os.getenv("ANPR_STREAM_TIMEOUT_SEC", "10.0"))
+    )
+    """Stream connection timeout in seconds."""
+
     # --- Recognition / normalisation ---
     plate_country: str = field(
         default_factory=lambda: os.getenv("ANPR_PLATE_COUNTRY", "IN")
@@ -127,6 +153,15 @@ class ANPRConfig:
 
         if self.duplicate_suppression_window_seconds < 0:
             raise ValueError("duplicate_suppression_window_seconds must be non-negative")
+
+        if self.frame_skip < 0:
+            raise ValueError("frame_skip must be non-negative")
+
+        if self.reconnect_attempts < 0:
+            raise ValueError("reconnect_attempts must be non-negative")
+
+        if self.reconnect_delay_sec < 0:
+            raise ValueError("reconnect_delay_sec must be non-negative")
 
         if not self.ocr_languages:
             raise ValueError("ocr_languages must not be empty")

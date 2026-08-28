@@ -2,15 +2,15 @@
 
 **IBVAP (Intelligent Border Video Analytics Platform)**  
 Module: `ai/member2_anpr/`  
-Phase: 4 — Production & Backend Integration Readiness  
+Phase: 5 — Real-Time RTSP/IP-Camera ANPR Integration  
 
 ---
 
 ## 1. Overview
 
-The **ANPR (Automatic Number Plate Recognition)** subsystem processes video frames and cropped vehicle regions to detect license plates, enhance plate images, perform OCR, normalize and validate Indian registration numbers, match against active watchlists, and generate standardized `IBVAPEvent` payloads for Member 3's backend.
+The **ANPR (Automatic Number Plate Recognition)** subsystem processes live IP-camera/RTSP video streams and vehicle crops to detect license plates, enhance plate images, perform OCR, normalize and validate Indian registration numbers, match against active watchlists, suppress duplicate detections on continuous streams, and generate standardized `IBVAPEvent` payloads for Member 3's backend.
 
-Phase 4 establishes the **Backend Integration Contract** for Member 3 (FastAPI), introduces thread-safe **In-Memory Duplicate Event Suppression** for live CCTV video streams, provides configuration validation, and ensures production-ready error handling across 189 automated tests (91% code coverage).
+Phase 5 introduces **Real-Time RTSP / Video Stream Ingestion** (`RTSPStreamReader`), **Configurable Frame Sampling & Stream Processing** (`ANPRStreamProcessor`), **Stream Health & Reconnection Management**, and **Runtime Streaming Metrics** across 205 automated tests (90% code coverage).
 
 ---
 
@@ -20,6 +20,8 @@ Member 2 exclusively owns all code under `ai/member2_anpr/`.
 
 | Responsibility | Module | Class / Helper |
 |---|---|---|
+| RTSP stream capture | `stream.py` | `RTSPStreamReader`, `mask_rtsp_url()` |
+| Real-time stream processing | `stream_processor.py` | `ANPRStreamProcessor`, `StreamStatistics` |
 | Public integration interface | `__init__.py` | `process_frame_to_events()` |
 | License plate detection | `detector.py` | `BasePlateDetector`, `MockPlateDetector`, `YOLOPlateDetector` |
 | Image preprocessing | `preprocessing.py` | `PlatePreprocessor` (resize, CLAHE, bilateral filter, binarization) |
@@ -39,7 +41,13 @@ Member 2 exclusively owns all code under `ai/member2_anpr/`.
 ## 3. Architecture
 
 ```text
-Input Video Frame (NumPy BGR array)
+IP CCTV / RTSP Stream
+      │
+      ▼
+RTSPStreamReader (with auto-reconnect & credential masking)
+      │
+      ▼
+ANPRStreamProcessor (with frame sampling/skipping)
       │
       ▼
 YOLOPlateDetector / BasePlateDetector
@@ -75,18 +83,65 @@ List[IBVAPEvent] ───► Member 3 Backend (FastAPI Ingestion)
 
 ---
 
-## 4. Backend Integration Contract (Member 3)
+## 4. RTSP Stream Reading & Processing (Phase 5)
+
+### Real-Time Stream Ingestion
+The `RTSPStreamReader` manages video connections to IP cameras, RTSP streams, local video files (`.mp4`, `.avi`), and USB webcams:
+- **Resilient Reconnection:** Automatically attempts reconnection on packet drops or connection resets up to `reconnect_attempts` (default: 3) with configurable backoff `reconnect_delay_sec`.
+- **Credential Security:** Automatically masks RTSP credentials in all diagnostic logs (`mask_rtsp_url()`) to prevent password leaks.
+- **Resource Management:** Ensures clean OpenCV `VideoCapture` release on shutdown.
+
+### Frame Sampling / Skipping
+In live 25–30 FPS video streams, evaluating heavy deep learning models on every single frame causes queue buildup.
+The `ANPRStreamProcessor` implements configurable frame sampling:
+- Setting `frame_skip=4` (via `--frame-skip 4` or `ANPR_FRAME_SKIP=4`) samples 1 out of every 5 frames (~5–6 FPS effective rate).
+- Decouples stream reading from inference to maintain near-real-time throughput.
+
+### Python Streaming Example
+
+```python
+from ai.member2_anpr import (
+    ANPRPipeline,
+    RTSPStreamReader,
+    ANPRStreamProcessor,
+    IBVAPEvent,
+)
+
+# 1. Initialize pipeline and stream reader
+pipeline = ANPRPipeline()
+stream_reader = RTSPStreamReader(
+    source="rtsp://admin:pass@192.168.1.100:554/live",
+    camera_id="CAM-BORDER-01",
+    reconnect_attempts=3,
+)
+
+# 2. Initialize stream processor with frame sampling
+processor = ANPRStreamProcessor(
+    stream_reader=stream_reader,
+    pipeline=pipeline,
+    frame_skip=4, # Process 1 out of every 5 frames
+)
+
+# 3. Stream generator yielding events in real time
+for event in processor.process_stream_events():
+    print(f"[{event.event_type.value}] Camera={event.camera_id} Plate={event.metadata.get('plate_number')}")
+
+# 4. View runtime statistics
+print(processor.stats.summary_table())
+```
+
+---
+
+## 5. Backend Integration Contract (Member 3)
 
 Member 3 (FastAPI Backend) consumes standardized `IBVAPEvent` objects without depending on internal YOLO, EasyOCR, or preprocessing classes.
 
 ### How Member 3 Consumes ANPR Events
 
-Member 3 can simply call `process_frame_to_events()` directly from video processing workers or API handlers:
-
 ```python
 from ai.member2_anpr import process_frame_to_events, IBVAPEvent
 
-# When a video frame arrives from camera stream:
+# When video processing receives a frame:
 events: list[IBVAPEvent] = process_frame_to_events(
     frame=opencv_bgr_frame,
     camera_id="CAM-BORDER-01",
@@ -96,8 +151,7 @@ events: list[IBVAPEvent] = process_frame_to_events(
 
 # Ingest events into backend database / API emission
 for event in events:
-    event_payload = event.model_dump()
-    print(f"Ingesting {event.event_type.value} event: {event_payload}")
+    await event_repository.save(event.model_dump())
 ```
 
 ### Event Payload Formats
@@ -146,7 +200,7 @@ for event in events:
 
 ---
 
-## 5. Duplicate Event Suppression
+## 6. Duplicate Event Suppression
 
 Continuous CCTV video streams process 20–30 frames per second. Detecting the same vehicle across consecutive frames would flood downstream backend APIs.
 
@@ -158,7 +212,7 @@ The `DuplicateSuppressor` module provides thread-safe in-memory filtering:
 
 ---
 
-## 6. Installation & Dependencies
+## 7. Installation & Dependencies
 
 ```bash
 # Navigate to module directory
@@ -170,7 +224,7 @@ pip install -r requirements.txt
 
 ---
 
-## 7. Model Setup & Weights
+## 8. Model Setup & Weights
 
 ### License Plate Detection (YOLO)
 Place your trained YOLO license plate detection weights (`.pt` file) in `ai/member2_anpr/models/`:
@@ -197,17 +251,20 @@ export ANPR_OCR_GPU="false"
 
 ---
 
-## 8. Usage & CLI
+## 9. Usage & CLI
 
 ```bash
 # Run simulation demo using mock components (no weights required)
 python -m ai.member2_anpr.main --mock
 
 # Run on a local vehicle image with mock pipeline
-python -m ai.member2_anpr.main --mock --image test_vehicle.jpg --camera CAM-01 --vehicle-id VEH-101
+python -m ai.member2_anpr.main --mock --image test_vehicle.jpg --camera-id CAM-01 --vehicle-id VEH-101
 
 # Run with real YOLO + EasyOCR pipeline on a local image
 python -m ai.member2_anpr.main --image test_vehicle.jpg --model-path models/license_plate.pt
+
+# Run live RTSP video stream with frame skipping
+python -m ai.member2_anpr.main --source rtsp://admin:pass@192.168.1.100:554/stream --frame-skip 4 --camera-id CAM-GATE-01
 
 # Run performance benchmark
 python -m ai.member2_anpr.main --benchmark --num-frames 30 --mock
@@ -215,7 +272,7 @@ python -m ai.member2_anpr.main --benchmark --num-frames 30 --mock
 
 ---
 
-## 9. Configuration Reference
+## 10. Configuration Reference
 
 Environment variables supported by `config.py`:
 
@@ -232,14 +289,19 @@ Environment variables supported by `config.py`:
 | `ANPR_PREPROCESS_WIDTH` | `320` | Standard target width for cropped plate images |
 | `ANPR_DUPLICATE_SUPPRESSION_ENABLED` | `true` | Enable duplicate event suppression for live streams |
 | `ANPR_DUPLICATE_WINDOW_SEC` | `10.0` | Duplicate suppression time window (seconds) |
+| `ANPR_RTSP_URL` | `None` | Default RTSP stream URL or video source path |
+| `ANPR_FRAME_SKIP` | `0` | Frames to skip between ANPR evaluations (default 0) |
+| `ANPR_RECONNECT_ATTEMPTS` | `3` | Maximum consecutive stream reconnect attempts |
+| `ANPR_RECONNECT_DELAY_SEC` | `2.0` | Delay between stream reconnection attempts |
+| `ANPR_STREAM_TIMEOUT_SEC` | `10.0` | Stream connection timeout in seconds |
 | `ANPR_DEFAULT_CAMERA_ID` | `CAM-01` | Default camera ID identifier |
 | `ANPR_LOG_LEVEL` | `INFO` | Python logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 
 ---
 
-## 10. Testing & Coverage
+## 11. Testing & Coverage
 
-The entire test suite executes in ~1.3s on CPU without requiring GPU, network, or downloaded model weights:
+The entire test suite executes in ~1.5s on CPU without requiring GPU, network, camera hardware, or downloaded model weights:
 
 ```bash
 # Run all tests
@@ -250,6 +312,8 @@ python -m pytest ai/member2_anpr/tests/ -v --cov=ai.member2_anpr --cov-report=te
 ```
 
 Test modules:
+- `test_stream.py`: RTSP stream reader, reconnection logic, error recovery, password masking
+- `test_stream_processor.py`: Frame skipping, stream iterator, statistics tracking, graceful stop
 - `test_detector.py`: Base detector & mock detector contract tests
 - `test_yolo_detector.py`: YOLO detector tests with mocked Ultralytics inference
 - `test_preprocessing.py`: Plate preprocessor tests (rescaling, CLAHE, binarization, edge cases)
@@ -267,7 +331,7 @@ Test modules:
 
 ---
 
-## 11. Known Limitations
+## 12. Known Limitations
 
 - **Extreme Angles (> 45°):** Highly skewed plates may experience lower OCR accuracy without 4-point perspective rectification.
 - **Heavy Motion Blur:** Preprocessing enhances edge contrast, but severely smeared characters cannot be reconstructed without specialized deblurring neural networks.

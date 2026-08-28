@@ -42,6 +42,8 @@ from .schemas import (
     RecognitionResult,
     WatchlistResult,
 )
+from .stream import RTSPStreamReader, mask_rtsp_url
+from .stream_processor import ANPRStreamProcessor, StreamStatistics
 from .suppressor import DuplicateSuppressor
 from .watchlist import BaseWatchlistMatcher, InMemoryWatchlistMatcher
 
@@ -114,6 +116,10 @@ __all__ = [
     "ANPRPipeline",
     "ANPRConfig",
     "default_config",
+    "RTSPStreamReader",
+    "ANPRStreamProcessor",
+    "StreamStatistics",
+    "mask_rtsp_url",
     "DuplicateSuppressor",
     "ANPRBenchmark",
     "BenchmarkReport",
@@ -140,5 +146,5 @@ __all__ = [
     "EventType",
 ]
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 __author__ = "Member 2 - ANPR Developer"

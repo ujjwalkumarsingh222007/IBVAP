@@ -1,14 +1,17 @@
 """
 IBVAP - Member 2 ANPR Module - main.py
 
-Command-line entry point, demo runner, and performance benchmark for the ANPR module.
+Command-line entry point, demo runner, RTSP stream processor, and benchmark for the ANPR module.
 
 Usage:
-    # Run mock demo
+    # Run mock simulation demo
     python -m ai.member2_anpr.main --mock
 
-    # Run on a local image using real or mock pipeline
-    python -m ai.member2_anpr.main --image path/to/vehicle.jpg --camera CAM-01
+    # Run on a local image
+    python -m ai.member2_anpr.main --image path/to/vehicle.jpg --camera-id CAM-01
+
+    # Run on an RTSP stream / video file with frame skipping
+    python -m ai.member2_anpr.main --source rtsp://192.168.1.100:554/stream --frame-skip 4 --max-frames 100
 
     # Run performance benchmark
     python -m ai.member2_anpr.main --benchmark --num-frames 30 --mock
@@ -31,6 +34,8 @@ from .event_generator import ANPREventGenerator
 from .ocr import EasyOCREngine, MockOCREngine
 from .pipeline import ANPRPipeline
 from .recognizer import PlateRecognizer
+from .stream import RTSPStreamReader, mask_rtsp_url
+from .stream_processor import ANPRStreamProcessor
 from .watchlist import InMemoryWatchlistMatcher
 
 logging.basicConfig(
@@ -78,20 +83,67 @@ def run_benchmark_cli(pipeline: ANPRPipeline, num_frames: int, use_mock: bool) -
     print("\n" + report.summary_table() + "\n")
 
 
+def run_stream_cli(
+    source: str,
+    camera_id: str,
+    pipeline: ANPRPipeline,
+    frame_skip: int,
+    max_frames: int | None,
+    vehicle_id: str | None,
+) -> None:
+    """Execute real-time RTSP/video stream processing loop."""
+    logger.info("Opening stream source: %s (camera_id=%s)", mask_rtsp_url(source), camera_id)
+    stream_reader = RTSPStreamReader(source=source, camera_id=camera_id)
+    processor = ANPRStreamProcessor(
+        stream_reader=stream_reader,
+        pipeline=pipeline,
+        frame_skip=frame_skip,
+        camera_id=camera_id,
+    )
+
+    logger.info("Processing stream (frame_skip=%d, max_frames=%s)...", frame_skip, max_frames)
+    for frame_idx, results, events in processor.process_stream(max_frames=max_frames, vehicle_id=vehicle_id):
+        if events:
+            for event in events:
+                logger.info(
+                    "[EVENT] %s on %s: Plate=%s Conf=%.2f",
+                    event.event_type.value,
+                    event.camera_id,
+                    event.metadata.get("plate_number"),
+                    event.confidence,
+                )
+
+    print("\n" + processor.stats.summary_table() + "\n")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="IBVAP Member 2 ANPR Module Runner")
-    parser.add_argument("--image", type=str, help="Path to input image file (optional)")
-    parser.add_argument("--camera", type=str, default="CAM-01", help="Camera ID (default: CAM-01)")
-    parser.add_argument("--vehicle-id", type=str, default=None, help="Associated vehicle ID")
+    parser.add_argument("--source", type=str, default=None, help="RTSP URL, video file path, or webcam index")
+    parser.add_argument("--camera", type=str, default=None, help="RTSP URL or Camera ID (backward compatibility)")
+    parser.add_argument("--camera-id", type=str, default="CAM-01", help="Camera ID identifier (default: CAM-01)")
+    parser.add_argument("--image", type=str, default=None, help="Path to input image file")
+    parser.add_argument("--vehicle-id", type=str, default=None, help="Associated vehicle tracking ID")
     parser.add_argument("--mock", action="store_true", help="Force mock components")
     parser.add_argument("--model-path", type=str, default=None, help="Path to YOLO license plate model (.pt)")
+    parser.add_argument("--frame-skip", type=int, default=0, help="Frames to skip between ANPR evaluations (default: 0)")
+    parser.add_argument("--max-frames", type=int, default=None, help="Maximum frames to process in stream")
     parser.add_argument("--benchmark", action="store_true", help="Run performance benchmark")
     parser.add_argument("--num-frames", type=int, default=30, help="Number of benchmark iterations (default: 30)")
 
     args = parser.parse_args()
 
+    # Determine stream source vs camera ID
+    stream_source = args.source
+    camera_id = args.camera_id
+
+    if args.camera:
+        if args.camera.startswith("rtsp://") or args.camera.startswith("http://") or os.path.exists(args.camera):
+            stream_source = args.camera
+        else:
+            camera_id = args.camera
+
     # Determine mock status
-    if not args.image and not args.model_path and not args.benchmark:
+    if not args.image and not stream_source and not args.model_path and not args.benchmark:
         args.mock = True
 
     try:
@@ -100,12 +152,24 @@ def main() -> None:
         logger.error("Pipeline initialization failed: %s", err)
         sys.exit(1)
 
-    # If benchmark requested
+    # 1. Benchmark Mode
     if args.benchmark:
         run_benchmark_cli(pipeline=pipeline, num_frames=args.num_frames, use_mock=args.mock)
         return
 
-    # Load image or generate synthetic frame
+    # 2. RTSP / Stream Mode
+    if stream_source:
+        run_stream_cli(
+            source=stream_source,
+            camera_id=camera_id,
+            pipeline=pipeline,
+            frame_skip=args.frame_skip,
+            max_frames=args.max_frames,
+            vehicle_id=args.vehicle_id,
+        )
+        return
+
+    # 3. Static Image / Single Frame Mode
     if args.image:
         if not os.path.exists(args.image):
             logger.error("Image file not found: %s", args.image)
@@ -116,13 +180,13 @@ def main() -> None:
             sys.exit(1)
         logger.info("Loaded image '%s' (shape: %s)", args.image, frame.shape)
     else:
-        logger.info("No --image specified; generating synthetic frame for demo.")
+        logger.info("No --image or --source specified; generating synthetic frame for demo.")
         frame = np.full((480, 640, 3), fill_value=128, dtype=np.uint8)
 
-    logger.info("Processing frame...")
+    logger.info("Processing single frame...")
     results = pipeline.process_frame(
         frame=frame,
-        camera_id=args.camera,
+        camera_id=camera_id,
         vehicle_id=args.vehicle_id,
     )
 
