@@ -6,7 +6,8 @@ import { CameraStatusGrid } from '../components/dashboard/CameraStatusGrid';
 import { DetectionStatsChart } from '../components/dashboard/DetectionStatsChart';
 import { Card } from '../components/common/Card';
 import { Modal } from '../components/common/Modal';
-import { LoadingSpinner } from '../components/common/LoadingSpinner';
+import { SkeletonLoader } from '../components/common/SkeletonLoader';
+import { ErrorState } from '../components/common/ErrorState';
 
 import { analyticsService } from '../services/analyticsService';
 import { camerasService } from '../services/camerasService';
@@ -16,7 +17,16 @@ import { DashboardStatistics, HourlyDetectionTrend } from '../types/analytics';
 import { Camera } from '../types/camera';
 import { Event } from '../types/event';
 
-import { Video, Activity, Bell, ShieldAlert, LayoutDashboard, RefreshCw } from 'lucide-react';
+import {
+  Video,
+  Activity,
+  Bell,
+  ShieldAlert,
+  LayoutDashboard,
+  RefreshCw,
+  Car,
+  UserCheck,
+} from 'lucide-react';
 
 export const DashboardPage: React.FC = () => {
   const [stats, setStats] = useState<DashboardStatistics | null>(null);
@@ -24,10 +34,12 @@ export const DashboardPage: React.FC = () => {
   const [events, setEvents] = useState<Event[]>([]);
   const [trends, setTrends] = useState<HourlyDetectionTrend[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
 
   const fetchDashboardData = async () => {
     setLoading(true);
+    setError(null);
     try {
       const [statsData, camerasData, eventsData, trendsData] = await Promise.all([
         analyticsService.getDashboardStats(),
@@ -39,8 +51,9 @@ export const DashboardPage: React.FC = () => {
       setCameras(camerasData);
       setEvents(eventsData);
       setTrends(trendsData);
-    } catch (err) {
-      console.error('Error fetching dashboard data:', err);
+    } catch (err: unknown) {
+      const errorObj = err as Error;
+      setError(errorObj.message || 'Failed to load surveillance dashboard data.');
     } finally {
       setLoading(false);
     }
@@ -50,9 +63,28 @@ export const DashboardPage: React.FC = () => {
     fetchDashboardData();
   }, []);
 
-  if (loading || !stats) {
-    return <LoadingSpinner label="Initializing IBVAP Command Dashboard..." />;
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <SkeletonLoader type="metric" count={4} />
+        <SkeletonLoader type="video" count={2} />
+      </div>
+    );
   }
+
+  if (error) {
+    return (
+      <div className="py-8">
+        <ErrorState
+          title="Dashboard Connection Notice"
+          message={error}
+          onRetry={fetchDashboardData}
+        />
+      </div>
+    );
+  }
+
+  if (!stats) return null;
 
   return (
     <div className="space-y-6 animate-fadeIn">
@@ -72,46 +104,66 @@ export const DashboardPage: React.FC = () => {
         }
       />
 
-      {/* Top 4 Dashboard Metric Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+      {/* 6 Key Dashboard Metric Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
         <MetricCard
           title="Active Cameras"
           value={`${stats.active_cameras}/${stats.total_cameras}`}
-          subtitle="RTSP / CCTV streams broadcasting"
+          subtitle="Streams live"
           trend="100% Signal"
           trendType="positive"
           accentColor="cyan"
-          icon={<Video size={20} />}
+          icon={<Video size={18} />}
         />
 
         <MetricCard
           title="Total Detections"
           value={stats.total_detections_today.toLocaleString()}
-          subtitle="YOLO / ANPR object hits today"
+          subtitle="YOLO / ANPR hits"
           trend={`+${stats.detections_change_percent}%`}
           trendType="positive"
           accentColor="emerald"
-          icon={<Activity size={20} />}
+          icon={<Activity size={18} />}
         />
 
         <MetricCard
           title="Active Alerts"
           value={stats.active_alerts}
-          subtitle={`${stats.critical_alerts} critical priority alerts`}
-          trend={`${stats.critical_alerts} Critical`}
+          subtitle={`${stats.critical_alerts} Critical`}
+          trend="Priority"
           trendType="negative"
           accentColor="red"
-          icon={<Bell size={20} />}
+          icon={<Bell size={18} />}
         />
 
         <MetricCard
           title="Watchlist Matches"
           value={stats.watchlist_matches_today}
-          subtitle="License plate / POI hits"
+          subtitle="Plate / POI matches"
           trend="Action Needed"
           trendType="negative"
           accentColor="amber"
-          icon={<ShieldAlert size={20} />}
+          icon={<ShieldAlert size={18} />}
+        />
+
+        <MetricCard
+          title="Vehicles Detected"
+          value={stats.vehicles_detected_today.toLocaleString()}
+          subtitle="ANPR & YOLO vehicle count"
+          trend="63% of total"
+          trendType="positive"
+          accentColor="cyan"
+          icon={<Car size={18} />}
+        />
+
+        <MetricCard
+          title="Persons Detected"
+          value={stats.persons_detected_today.toLocaleString()}
+          subtitle="Pedestrians & officers"
+          trend="29% of total"
+          trendType="neutral"
+          accentColor="emerald"
+          icon={<UserCheck size={18} />}
         />
       </div>
 
@@ -121,7 +173,7 @@ export const DashboardPage: React.FC = () => {
         <div className="lg:col-span-2">
           <Card
             title="Live Camera Stream Grid"
-            subtitle="Primary tactical RTSP surveillance feeds with AI object detection overlays"
+            subtitle="Tactical RTSP feeds with automated AI detection layer"
             icon={<Video size={18} />}
           >
             <CameraStatusGrid cameras={cameras} />
@@ -132,7 +184,7 @@ export const DashboardPage: React.FC = () => {
         <div className="lg:col-span-1">
           <Card
             title="Recent AI Events Stream"
-            subtitle="Live feed of incoming computer vision events"
+            subtitle="Incoming computer vision event stream"
             icon={<Activity size={18} />}
           >
             <RecentEventsList events={events.slice(0, 5)} onSelectEvent={setSelectedEvent} />
@@ -154,7 +206,7 @@ export const DashboardPage: React.FC = () => {
         <Modal
           isOpen={!!selectedEvent}
           onClose={() => setSelectedEvent(null)}
-          title={`Event Details — ${selectedEvent.event_type}`}
+          title={`Event Payload Inspector — ${selectedEvent.event_type}`}
         >
           <div className="space-y-4">
             <div className="flex items-center justify-between bg-slate-900 p-3 rounded-lg border border-slate-800">

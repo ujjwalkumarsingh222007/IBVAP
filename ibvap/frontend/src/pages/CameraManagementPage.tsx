@@ -1,24 +1,23 @@
 import React, { useEffect, useState } from 'react';
 import { PageHeader } from '../components/common/PageHeader';
 import { Card } from '../components/common/Card';
-import { Modal } from '../components/common/Modal';
-import { LoadingSpinner } from '../components/common/LoadingSpinner';
+import { SkeletonLoader } from '../components/common/SkeletonLoader';
 import { StatusBadge } from '../components/common/StatusBadge';
+import { CameraFormModal } from '../components/camera-management/CameraFormModal';
+import { ConfirmModal } from '../components/common/ConfirmModal';
 import { camerasService } from '../services/camerasService';
 import { Camera } from '../types/camera';
-import { Settings, Plus, Video, Cpu, Server, Wifi } from 'lucide-react';
+import { Settings, Plus, Cpu, Edit, Trash2, Power, Search, Lock } from 'lucide-react';
 
 export const CameraManagementPage: React.FC = () => {
   const [cameras, setCameras] = useState<Camera[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
-  const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
+  const [searchQuery, setSearchQuery] = useState<string>('');
 
-  // Form states
-  const [name, setName] = useState('');
-  const [location, setLocation] = useState('');
-  const [streamUrl, setStreamUrl] = useState('');
-  const [zone, setZone] = useState('Sector North');
-  const [resolution, setResolution] = useState('1920x1080');
+  // Modals
+  const [isFormModalOpen, setIsFormModalOpen] = useState<boolean>(false);
+  const [editingCamera, setEditingCamera] = useState<Camera | null>(null);
+  const [deletingCamera, setDeletingCamera] = useState<Camera | null>(null);
 
   useEffect(() => {
     async function loadCameras() {
@@ -35,29 +34,54 @@ export const CameraManagementPage: React.FC = () => {
     loadCameras();
   }, []);
 
-  const handleAddCamera = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!name || !streamUrl) return;
+  const handleSaveCamera = async (data: Partial<Camera>) => {
     try {
-      const newCam = await camerasService.addCamera({
-        name,
-        location: location || 'Border Station Alpha',
-        stream_url: streamUrl,
-        zone,
-        resolution,
-        ai_enabled: true,
-      });
-      setCameras([...cameras, newCam]);
-      setIsAddModalOpen(false);
-      setName('');
-      setStreamUrl('');
-      setLocation('');
+      if (editingCamera) {
+        const updated = await camerasService.updateCamera(editingCamera.id, data);
+        setCameras(cameras.map(c => c.id === editingCamera.id ? updated : c));
+      } else {
+        const created = await camerasService.addCamera(data as any);
+        setCameras([created, ...cameras]);
+      }
+      setIsFormModalOpen(false);
+      setEditingCamera(null);
     } catch (err) {
       console.error(err);
     }
   };
 
-  if (loading) return <LoadingSpinner label="Loading Camera Management Node..." />;
+  const handleToggleStatus = async (id: string) => {
+    try {
+      const updated = await camerasService.toggleCameraStatus(id);
+      setCameras(cameras.map(c => c.id === id ? updated : c));
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleDeleteCamera = async () => {
+    if (!deletingCamera) return;
+    try {
+      await camerasService.deleteCamera(deletingCamera.id);
+      setCameras(cameras.filter(c => c.id !== deletingCamera.id));
+      setDeletingCamera(null);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const filteredCameras = cameras.filter((cam) => {
+    if (!searchQuery) return true;
+    const q = searchQuery.toLowerCase();
+    return (
+      cam.id.toLowerCase().includes(q) ||
+      cam.name.toLowerCase().includes(q) ||
+      cam.location.toLowerCase().includes(q) ||
+      cam.zone.toLowerCase().includes(q)
+    );
+  });
+
+  if (loading) return <SkeletonLoader type="table-row" count={5} />;
 
   return (
     <div className="space-y-6 animate-fadeIn">
@@ -67,14 +91,29 @@ export const CameraManagementPage: React.FC = () => {
         icon={<Settings size={22} />}
         action={
           <button
-            onClick={() => setIsAddModalOpen(true)}
-            className="flex items-center gap-2 px-3 py-1.5 bg-cyan-500 hover:bg-cyan-400 text-black text-xs font-bold rounded-lg transition-colors shadow-md shadow-cyan-500/20"
+            onClick={() => {
+              setEditingCamera(null);
+              setIsFormModalOpen(true);
+            }}
+            className="flex items-center gap-2 px-3 py-1.5 bg-cyan-500 hover:bg-cyan-400 text-black text-xs font-bold font-mono rounded-lg transition-colors shadow-md shadow-cyan-500/20"
           >
             <Plus size={16} />
-            <span>Register Camera Stream</span>
+            <span>Register Stream</span>
           </button>
         }
       />
+
+      {/* Search Bar */}
+      <div className="relative max-w-md">
+        <Search size={16} className="absolute left-3 top-3 text-slate-400" />
+        <input
+          type="text"
+          placeholder="Search by camera name, ID, location, or zone..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className="w-full bg-[#121824] border border-slate-800 rounded-xl pl-9 pr-4 py-2 text-xs font-mono text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-cyan-500 transition-colors"
+        />
+      </div>
 
       <Card className="p-0 overflow-hidden">
         <div className="overflow-x-auto">
@@ -82,15 +121,15 @@ export const CameraManagementPage: React.FC = () => {
             <thead>
               <tr className="bg-slate-900/90 text-[11px] font-mono text-slate-400 uppercase tracking-wider border-b border-slate-800">
                 <th className="py-3 px-4">Camera ID / Name</th>
-                <th className="py-3 px-4">RTSP Stream URL</th>
+                <th className="py-3 px-4">Configured Stream URL</th>
                 <th className="py-3 px-4">Zone / Location</th>
                 <th className="py-3 px-4">Status</th>
                 <th className="py-3 px-4">Resolution / FPS</th>
-                <th className="py-3 px-4">AI Vision Status</th>
+                <th className="py-3 px-4 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/60 text-xs font-mono">
-              {cameras.map((cam) => (
+              {filteredCameras.map((cam) => (
                 <tr key={cam.id} className="hover:bg-slate-800/30 transition-colors">
                   <td className="py-3 px-4">
                     <div className="font-bold text-cyan-400">{cam.id}</div>
@@ -98,7 +137,10 @@ export const CameraManagementPage: React.FC = () => {
                   </td>
 
                   <td className="py-3 px-4 text-slate-400 text-[11px] max-w-xs truncate">
-                    {cam.stream_url}
+                    <span className="inline-flex items-center gap-1 text-[10px] text-slate-500 mr-1">
+                      <Lock size={10} />
+                    </span>
+                    {cam.stream_url.replace(/:[^:@]+@/, ':****@')}
                   </td>
 
                   <td className="py-3 px-4">
@@ -114,10 +156,39 @@ export const CameraManagementPage: React.FC = () => {
                     {cam.resolution} • {cam.fps} FPS
                   </td>
 
-                  <td className="py-3 px-4">
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-500/10 text-emerald-400 rounded text-[10px] border border-emerald-500/20">
-                      <Cpu size={11} /> YOLO + ANPR Enabled
-                    </span>
+                  <td className="py-3 px-4 text-right">
+                    <div className="flex items-center justify-end gap-1.5">
+                      <button
+                        onClick={() => handleToggleStatus(cam.id)}
+                        className={`p-1.5 rounded-lg border transition-colors ${
+                          cam.status === 'ONLINE'
+                            ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/20'
+                            : 'bg-slate-900 text-slate-500 border-slate-800 hover:text-slate-200'
+                        }`}
+                        title="Toggle stream status"
+                      >
+                        <Power size={14} />
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          setEditingCamera(cam);
+                          setIsFormModalOpen(true);
+                        }}
+                        className="p-1.5 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-cyan-400 rounded-lg border border-slate-800 transition-colors"
+                        title="Edit configuration"
+                      >
+                        <Edit size={14} />
+                      </button>
+
+                      <button
+                        onClick={() => setDeletingCamera(cam)}
+                        className="p-1.5 bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-red-400 rounded-lg border border-slate-800 transition-colors"
+                        title="Delete camera stream"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -126,89 +197,28 @@ export const CameraManagementPage: React.FC = () => {
         </div>
       </Card>
 
-      {/* Add Camera Modal */}
-      <Modal
-        isOpen={isAddModalOpen}
-        onClose={() => setIsAddModalOpen(false)}
-        title="Register New CCTV / RTSP Camera Stream"
-      >
-        <form onSubmit={handleAddCamera} className="space-y-4">
-          <div>
-            <label className="block text-xs font-mono text-slate-400 mb-1">Camera Stream Name</label>
-            <input
-              type="text"
-              placeholder="e.g. Sector 9 Perimeter Fence Camera"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs font-mono text-slate-200 focus:outline-none focus:border-cyan-500"
-              required
-            />
-          </div>
+      {/* Camera Add / Edit Form Modal */}
+      {isFormModalOpen && (
+        <CameraFormModal
+          isOpen={isFormModalOpen}
+          onClose={() => setIsFormModalOpen(false)}
+          onSave={handleSaveCamera}
+          initialData={editingCamera}
+        />
+      )}
 
-          <div>
-            <label className="block text-xs font-mono text-slate-400 mb-1">RTSP Stream URL</label>
-            <input
-              type="text"
-              placeholder="rtsp://admin:pass@192.168.10.108:554/live/stream1"
-              value={streamUrl}
-              onChange={(e) => setStreamUrl(e.target.value)}
-              className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs font-mono text-slate-200 focus:outline-none focus:border-cyan-500"
-              required
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-mono text-slate-400 mb-1">Zone Tag</label>
-            <input
-              type="text"
-              placeholder="e.g. Sector North"
-              value={zone}
-              onChange={(e) => setZone(e.target.value)}
-              className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs font-mono text-slate-200 focus:outline-none focus:border-cyan-500"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-mono text-slate-400 mb-1">Physical Location</label>
-            <input
-              type="text"
-              placeholder="e.g. Watchtower Delta-4"
-              value={location}
-              onChange={(e) => setLocation(e.target.value)}
-              className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs font-mono text-slate-200 focus:outline-none focus:border-cyan-500"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-mono text-slate-400 mb-1">Stream Resolution</label>
-            <select
-              value={resolution}
-              onChange={(e) => setResolution(e.target.value)}
-              className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2 text-xs font-mono text-slate-200 focus:outline-none focus:border-cyan-500"
-            >
-              <option value="1920x1080">1920x1080 (1080p FHD)</option>
-              <option value="3840x2160">3840x2160 (4K UHD)</option>
-              <option value="1280x720">1280x720 (720p HD)</option>
-            </select>
-          </div>
-
-          <div className="flex justify-end gap-2 pt-2">
-            <button
-              type="button"
-              onClick={() => setIsAddModalOpen(false)}
-              className="px-3 py-1.5 bg-slate-900 text-slate-300 text-xs font-mono rounded-lg border border-slate-800"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              className="px-3 py-1.5 bg-cyan-500 text-black font-bold text-xs rounded-lg shadow-md shadow-cyan-500/20"
-            >
-              Register Camera
-            </button>
-          </div>
-        </form>
-      </Modal>
+      {/* Delete Confirmation Modal */}
+      {deletingCamera && (
+        <ConfirmModal
+          isOpen={!!deletingCamera}
+          onClose={() => setDeletingCamera(null)}
+          onConfirm={handleDeleteCamera}
+          title={`Remove Camera Stream (${deletingCamera.id})`}
+          message={`Are you sure you want to unregister camera stream "${deletingCamera.name}"? This action cannot be undone.`}
+          confirmLabel="Remove Stream"
+          isDangerous={true}
+        />
+      )}
     </div>
   );
 };

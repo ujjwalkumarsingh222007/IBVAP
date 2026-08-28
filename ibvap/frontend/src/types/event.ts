@@ -15,6 +15,8 @@ export interface EventMetadata {
   speed_kmh?: number;
   threat_level?: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
   zone_id?: string;
+  tracking_id?: string;
+  details?: string;
   [key: string]: unknown;
 }
 
@@ -25,9 +27,11 @@ export interface Event {
   timestamp: string;
   confidence: number; // 0.00 to 1.00
   metadata: EventMetadata;
+  status?: 'PROCESSED' | 'PENDING' | 'FLAGGED';
 }
 
 export interface EventFilter {
+  search_query?: string;
   event_type?: EventType | 'ALL';
   camera_id?: string | 'ALL';
   min_confidence?: number;

@@ -12,5 +12,8 @@ export interface Alert {
   timestamp: string;
   acknowledged_by?: string;
   acknowledged_at?: string;
+  resolved_by?: string;
+  resolved_at?: string;
+  resolution_notes?: string;
   metadata?: Record<string, unknown>;
 }

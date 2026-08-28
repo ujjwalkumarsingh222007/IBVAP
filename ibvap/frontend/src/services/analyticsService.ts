@@ -1,6 +1,20 @@
 import { apiFetch } from './api';
-import { DashboardStatistics, HourlyDetectionTrend, ThreatDistribution } from '../types/analytics';
-import { MOCK_DASHBOARD_STATS, MOCK_HOURLY_TRENDS, MOCK_THREAT_DISTRIBUTION } from '../data/mockData';
+import {
+  DashboardStatistics,
+  HourlyDetectionTrend,
+  EventTypeDistribution,
+  CameraEventBreakdown,
+  AlertSeverityDistribution,
+  ThreatDistribution,
+} from '../types/analytics';
+import {
+  MOCK_DASHBOARD_STATS,
+  MOCK_HOURLY_TRENDS,
+  MOCK_EVENT_TYPE_DISTRIBUTION,
+  MOCK_CAMERA_EVENT_BREAKDOWN,
+  MOCK_ALERT_SEVERITY_DISTRIBUTION,
+  MOCK_THREAT_DISTRIBUTION,
+} from '../data/mockData';
 
 export const analyticsService = {
   /**
@@ -24,6 +38,42 @@ export const analyticsService = {
     } catch (error) {
       console.warn('[IBVAP API] Backend unreachable for /analytics/hourly. Using fallback UI mock data.', error);
       return MOCK_HOURLY_TRENDS;
+    }
+  },
+
+  /**
+   * Fetch event type distribution pie data
+   */
+  async getEventTypeDistribution(): Promise<EventTypeDistribution[]> {
+    try {
+      return await apiFetch<EventTypeDistribution[]>('/analytics/event-types');
+    } catch (error) {
+      console.warn('[IBVAP API] Backend unreachable for /analytics/event-types.', error);
+      return MOCK_EVENT_TYPE_DISTRIBUTION;
+    }
+  },
+
+  /**
+   * Fetch camera event breakdown bar data
+   */
+  async getCameraEventBreakdown(): Promise<CameraEventBreakdown[]> {
+    try {
+      return await apiFetch<CameraEventBreakdown[]>('/analytics/camera-breakdown');
+    } catch (error) {
+      console.warn('[IBVAP API] Backend unreachable for /analytics/camera-breakdown.', error);
+      return MOCK_CAMERA_EVENT_BREAKDOWN;
+    }
+  },
+
+  /**
+   * Fetch alert severity distribution data
+   */
+  async getAlertSeverityDistribution(): Promise<AlertSeverityDistribution[]> {
+    try {
+      return await apiFetch<AlertSeverityDistribution[]>('/analytics/alert-severities');
+    } catch (error) {
+      console.warn('[IBVAP API] Backend unreachable for /analytics/alert-severities.', error);
+      return MOCK_ALERT_SEVERITY_DISTRIBUTION;
     }
   },
 
