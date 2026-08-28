@@ -1,0 +1,7 @@
+# Phase 1A — core dependencies only
+ultralytics>=8.2.0      # YOLO inference (auto-downloads model weights on first run)
+opencv-python>=4.9.0    # video capture, drawing, display
+numpy>=1.24.0           # frame arrays
+
+# Testing
+pytest>=8.0.0
