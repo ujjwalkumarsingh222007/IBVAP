@@ -1,33 +1,24 @@
 """
-test_events.py — Unit and integration tests for IBVAP backend API and event persistence.
+test_events.py — Unit and integration tests for IBVAP backend API (Phase 1 & Phase 2A).
 
-Tests all specified behaviors:
-1. GET / works.
-2. POST /api/v1/events accepts valid event.
-3. Event is persisted in database.
-4. Response contains generated ID.
-5. camera_id is stored.
-6. event_type is stored.
-7. timestamp is stored.
-8. confidence is stored.
-9. metadata is stored.
-10. INTRUSION_DETECTED works.
-11. OBJECT_DETECTED works.
-12. VEHICLE_DETECTED works.
-13. PERSON_DETECTED works.
-14. ANPR_DETECTED works.
-15. WATCHLIST_MATCH works.
-16. SUSPICIOUS_ACTIVITY works.
-17. Unknown event_type returns 422.
-18. Invalid confidence (<0.0, >1.0) returns 422.
-19. Missing required fields return 422.
-20. Invalid metadata (non-dict) returns 422.
-21. GET /api/v1/events and GET /api/v1/events/{id} work as expected.
+Covers:
+1. GET / root health check.
+2. POST /api/v1/events creation & validation.
+3. GET /api/v1/events listing and newest-first ordering (created_at DESC, id DESC).
+4. GET /api/v1/events filtering by event_type.
+5. GET /api/v1/events filtering by camera_id.
+6. GET /api/v1/events combined filtering (event_type + camera_id).
+7. GET /api/v1/events pagination (limit & offset).
+8. GET /api/v1/events boundary validation (limit < 1, limit > 100, offset < 0, invalid event_type -> 422).
+9. GET /api/v1/events empty result handling.
+10. GET /api/v1/events/stats aggregate statistics (total_events, intrusions, vehicles, persons, anpr, watchlist, suspicious_activity).
+11. GET /api/v1/events/{id} single event retrieval and 404 for nonexistent id.
+12. Regression guards for Phase 1D contracts.
 """
 
 import sys
-import os
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
 
 # Add backend directory to sys.path
 BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -40,10 +31,11 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
+from app.models import Event
 from app.main import app
 
 # ---------------------------------------------------------------------------
-# In-Memory SQLite Test Database Setup (Isolated per test session/function)
+# In-Memory SQLite Test Database Setup (Isolated per test function)
 # ---------------------------------------------------------------------------
 SQLALCHEMY_TEST_DATABASE_URL = "sqlite:///:memory:"
 
@@ -81,6 +73,16 @@ def client():
     app.dependency_overrides.clear()
 
 
+@pytest.fixture
+def db_session():
+    """Direct database session for inserting controlled fixture data."""
+    db = TestingSessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
 # ---------------------------------------------------------------------------
 # 1. Health / Root Endpoint
 # ---------------------------------------------------------------------------
@@ -95,7 +97,7 @@ def test_root_health_check(client: TestClient):
 
 
 # ---------------------------------------------------------------------------
-# 2. Event Creation & Persistence
+# 2. Event Creation & Persistence (Phase 1D Regression)
 # ---------------------------------------------------------------------------
 
 def test_post_event_accepts_valid_payload_and_persists(client: TestClient):
@@ -155,25 +157,6 @@ def test_event_can_be_retrieved_after_creation(client: TestClient):
     assert retrieved["event_type"] == "VEHICLE_DETECTED"
 
 
-def test_list_events(client: TestClient):
-    """GET /api/v1/events lists persisted events."""
-    for i in range(3):
-        client.post(
-            "/api/v1/events",
-            json={
-                "camera_id": f"CAM-{i}",
-                "event_type": "OBJECT_DETECTED",
-                "timestamp": "2026-08-28T12:00:00Z",
-                "confidence": 0.75,
-                "metadata": {"seq": i},
-            },
-        )
-    list_resp = client.get("/api/v1/events")
-    assert list_resp.status_code == 200
-    events = list_resp.json()
-    assert len(events) == 3
-
-
 def test_get_nonexistent_event_returns_404(client: TestClient):
     """GET /api/v1/events/99999 returns 404 Not Found."""
     resp = client.get("/api/v1/events/99999")
@@ -224,7 +207,7 @@ def test_unknown_event_type_rejected_with_422(client: TestClient):
 
 
 # ---------------------------------------------------------------------------
-# 4. Confidence Score Validation
+# 4. Confidence & Field Validations
 # ---------------------------------------------------------------------------
 
 def test_confidence_boundary_values(client: TestClient):
@@ -258,10 +241,6 @@ def test_confidence_out_of_range_rejected_with_422(client: TestClient):
         )
         assert response.status_code == 422
 
-
-# ---------------------------------------------------------------------------
-# 5. Missing / Invalid Fields Validation
-# ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize(
     "missing_field",
@@ -312,10 +291,6 @@ def test_empty_camera_id_returns_422(client: TestClient):
     assert response.status_code == 422
 
 
-# ---------------------------------------------------------------------------
-# 6. Future ANPR (Member 2) Metadata Compatibility
-# ---------------------------------------------------------------------------
-
 def test_anpr_event_metadata_flexibility(client: TestClient):
     """Backend accommodates flexible ANPR metadata from Member 2."""
     anpr_payload = {
@@ -335,3 +310,216 @@ def test_anpr_event_metadata_flexibility(client: TestClient):
     data = response.json()
     assert data["metadata"]["license_plate"] == "ABC-1234"
     assert data["metadata"]["country"] == "IN"
+
+
+# ---------------------------------------------------------------------------
+# 5. Phase 2A: Querying, Filtering, Pagination & Ordering
+# ---------------------------------------------------------------------------
+
+def _seed_sample_events(client: TestClient):
+    """Helper to populate test events across multiple cameras and types."""
+    events_data = [
+        ("CAM-01", "INTRUSION_DETECTED", 0.95),
+        ("CAM-01", "PERSON_DETECTED", 0.90),
+        ("CAM-02", "VEHICLE_DETECTED", 0.85),
+        ("CAM-02", "INTRUSION_DETECTED", 0.92),
+        ("CAM-03", "ANPR_DETECTED", 0.99),
+        ("CAM-01", "WATCHLIST_MATCH", 0.88),
+        ("CAM-03", "SUSPICIOUS_ACTIVITY", 0.78),
+    ]
+    for idx, (cam, ev_type, conf) in enumerate(events_data):
+        client.post(
+            "/api/v1/events",
+            json={
+                "camera_id": cam,
+                "event_type": ev_type,
+                "timestamp": f"2026-08-28T10:{idx:02d}:00Z",
+                "confidence": conf,
+                "metadata": {"seq": idx},
+            },
+        )
+
+
+def test_list_events_default(client: TestClient):
+    """GET /api/v1/events returns events list with default pagination."""
+    _seed_sample_events(client)
+    resp = client.get("/api/v1/events")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 7
+
+
+def test_list_events_ordered_newest_first(client: TestClient, db_session):
+    """GET /api/v1/events returns events ordered by created_at DESC, id DESC."""
+    base_time = datetime.now(timezone.utc)
+    # Insert 3 events with distinct created_at
+    e1 = Event(
+        camera_id="CAM-01",
+        event_type="PERSON_DETECTED",
+        timestamp="2026-08-28T10:00:00Z",
+        confidence=0.9,
+        event_metadata={"name": "first"},
+        created_at=base_time - timedelta(minutes=10),
+    )
+    e2 = Event(
+        camera_id="CAM-01",
+        event_type="VEHICLE_DETECTED",
+        timestamp="2026-08-28T10:05:00Z",
+        confidence=0.9,
+        event_metadata={"name": "second"},
+        created_at=base_time - timedelta(minutes=5),
+    )
+    e3 = Event(
+        camera_id="CAM-01",
+        event_type="INTRUSION_DETECTED",
+        timestamp="2026-08-28T10:10:00Z",
+        confidence=0.9,
+        event_metadata={"name": "third"},
+        created_at=base_time,
+    )
+    db_session.add_all([e1, e2, e3])
+    db_session.commit()
+
+    resp = client.get("/api/v1/events")
+    assert resp.status_code == 200
+    items = resp.json()
+    assert len(items) == 3
+    # Newest event should be first
+    assert items[0]["metadata"]["name"] == "third"
+    assert items[1]["metadata"]["name"] == "second"
+    assert items[2]["metadata"]["name"] == "first"
+
+
+def test_filter_by_event_type(client: TestClient):
+    """GET /api/v1/events?event_type=INTRUSION_DETECTED filters properly."""
+    _seed_sample_events(client)
+    resp = client.get("/api/v1/events?event_type=INTRUSION_DETECTED")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 2
+    for item in data:
+        assert item["event_type"] == "INTRUSION_DETECTED"
+
+
+def test_filter_by_camera_id(client: TestClient):
+    """GET /api/v1/events?camera_id=CAM-01 filters properly."""
+    _seed_sample_events(client)
+    resp = client.get("/api/v1/events?camera_id=CAM-01")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 3
+    for item in data:
+        assert item["camera_id"] == "CAM-01"
+
+
+def test_filter_by_event_type_and_camera_id(client: TestClient):
+    """GET /api/v1/events?event_type=INTRUSION_DETECTED&camera_id=CAM-01 filters combined."""
+    _seed_sample_events(client)
+    resp = client.get("/api/v1/events?event_type=INTRUSION_DETECTED&camera_id=CAM-01")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 1
+    assert data[0]["camera_id"] == "CAM-01"
+    assert data[0]["event_type"] == "INTRUSION_DETECTED"
+
+
+def test_pagination_limit(client: TestClient):
+    """GET /api/v1/events?limit=3 returns at most 3 items."""
+    _seed_sample_events(client)
+    resp = client.get("/api/v1/events?limit=3")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 3
+
+
+def test_pagination_offset(client: TestClient):
+    """GET /api/v1/events?limit=2&offset=2 skips the first 2 items."""
+    _seed_sample_events(client)
+    all_resp = client.get("/api/v1/events?limit=10")
+    all_data = all_resp.json()
+
+    offset_resp = client.get("/api/v1/events?limit=2&offset=2")
+    assert offset_resp.status_code == 200
+    offset_data = offset_resp.json()
+    assert len(offset_data) == 2
+    assert offset_data[0]["id"] == all_data[2]["id"]
+    assert offset_data[1]["id"] == all_data[3]["id"]
+
+
+def test_empty_results_when_filter_matches_nothing(client: TestClient):
+    """Querying a camera or event_type with no matches returns []."""
+    _seed_sample_events(client)
+    resp = client.get("/api/v1/events?camera_id=NON_EXISTENT_CAM")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+def test_invalid_query_parameters_return_422(client: TestClient):
+    """Invalid query parameter boundaries return 422."""
+    # limit > 100
+    assert client.get("/api/v1/events?limit=101").status_code == 422
+    # limit < 1
+    assert client.get("/api/v1/events?limit=0").status_code == 422
+    assert client.get("/api/v1/events?limit=-5").status_code == 422
+    # offset < 0
+    assert client.get("/api/v1/events?offset=-1").status_code == 422
+    # invalid event_type
+    assert client.get("/api/v1/events?event_type=INVALID_TYPE").status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# 6. Phase 2A: Event Statistics Endpoint
+# ---------------------------------------------------------------------------
+
+def test_event_stats_empty_database(client: TestClient):
+    """GET /api/v1/events/stats on an empty database returns all zeros."""
+    resp = client.get("/api/v1/events/stats")
+    assert resp.status_code == 200
+    stats = resp.json()
+    assert stats["total_events"] == 0
+    assert stats["total_intrusions"] == 0
+    assert stats["total_vehicles"] == 0
+    assert stats["total_persons"] == 0
+    assert stats["total_anpr"] == 0
+    assert stats["total_watchlist_matches"] == 0
+    assert stats["total_suspicious_activity"] == 0
+
+
+def test_event_stats_populated_database(client: TestClient):
+    """GET /api/v1/events/stats returns accurate counts for all categories."""
+    events = [
+        ("CAM-01", "INTRUSION_DETECTED"),
+        ("CAM-02", "INTRUSION_DETECTED"),
+        ("CAM-03", "INTRUSION_DETECTED"),
+        ("CAM-01", "VEHICLE_DETECTED"),
+        ("CAM-02", "VEHICLE_DETECTED"),
+        ("CAM-01", "PERSON_DETECTED"),
+        ("CAM-01", "ANPR_DETECTED"),
+        ("CAM-02", "ANPR_DETECTED"),
+        ("CAM-01", "WATCHLIST_MATCH"),
+        ("CAM-01", "SUSPICIOUS_ACTIVITY"),
+        ("CAM-02", "SUSPICIOUS_ACTIVITY"),
+    ]
+    for cam, ev_type in events:
+        client.post(
+            "/api/v1/events",
+            json={
+                "camera_id": cam,
+                "event_type": ev_type,
+                "timestamp": "2026-08-28T12:00:00Z",
+                "confidence": 0.90,
+                "metadata": {},
+            },
+        )
+
+    resp = client.get("/api/v1/events/stats")
+    assert resp.status_code == 200
+    stats = resp.json()
+
+    assert stats["total_events"] == 11
+    assert stats["total_intrusions"] == 3
+    assert stats["total_vehicles"] == 2
+    assert stats["total_persons"] == 1
+    assert stats["total_anpr"] == 2
+    assert stats["total_watchlist_matches"] == 1
+    assert stats["total_suspicious_activity"] == 2

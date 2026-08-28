@@ -1,16 +1,17 @@
 """
-events.py — API endpoints for managing and receiving IBVAP events.
+events.py — API endpoints for managing, receiving, and querying IBVAP surveillance events.
 """
 
 from __future__ import annotations
 
-from typing import List
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import List, Optional
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import Event
-from app.schemas import EventCreate, EventResponse
+from app.schemas import EventCreate, EventResponse, EventStatsResponse, EventType
 
 router = APIRouter(
     prefix="/api/v1/events",
@@ -62,18 +63,52 @@ def create_event(
     "",
     response_model=List[EventResponse],
     status_code=status.HTTP_200_OK,
-    summary="List all persisted events",
-    description="Retrieve a list of recorded events for verification and inspection.",
+    summary="List and filter persisted surveillance events",
+    description=(
+        "Retrieve a paginated list of surveillance events ordered newest first (created_at DESC, id DESC). "
+        "Supports filtering by event_type and camera_id."
+    ),
 )
 def list_events(
-    skip: int = 0,
-    limit: int = 100,
+    event_type: Optional[EventType] = Query(
+        default=None,
+        description="Filter events by category/type (e.g. INTRUSION_DETECTED, ANPR_DETECTED).",
+    ),
+    camera_id: Optional[str] = Query(
+        default=None,
+        description="Filter events by camera identifier (e.g. CAM-01).",
+    ),
+    limit: int = Query(
+        default=50,
+        ge=1,
+        le=100,
+        description="Maximum number of events to return (between 1 and 100).",
+    ),
+    offset: int = Query(
+        default=0,
+        ge=0,
+        description="Number of events to skip for pagination (0 or greater).",
+    ),
     db: Session = Depends(get_db),
 ) -> List[EventResponse]:
     """
-    List events from the database.
+    List events from the database with optional filtering and pagination.
     """
-    events = db.query(Event).order_by(Event.id.desc()).offset(skip).limit(limit).all()
+    query = db.query(Event)
+
+    if event_type is not None:
+        query = query.filter(Event.event_type == event_type.value)
+    if camera_id is not None:
+        query = query.filter(Event.camera_id == camera_id)
+
+    # Order newest first (created_at DESC, then id DESC)
+    events = (
+        query.order_by(Event.created_at.desc(), Event.id.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
     return [
         EventResponse(
             id=ev.id,
@@ -86,6 +121,40 @@ def list_events(
         )
         for ev in events
     ]
+
+
+@router.get(
+    "/stats",
+    response_model=EventStatsResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get surveillance event statistics",
+    description="Returns aggregate counts of events categorized by event type for the dashboard.",
+)
+def get_event_stats(
+    db: Session = Depends(get_db),
+) -> EventStatsResponse:
+    """
+    Calculate and return aggregate event statistics from the database.
+    """
+    total_events = db.query(func.count(Event.id)).scalar() or 0
+
+    # Aggregate counts by event_type in a single grouped SQL query
+    counts = (
+        db.query(Event.event_type, func.count(Event.id))
+        .group_by(Event.event_type)
+        .all()
+    )
+    counts_dict = dict(counts)
+
+    return EventStatsResponse(
+        total_events=total_events,
+        total_intrusions=counts_dict.get(EventType.INTRUSION_DETECTED.value, 0),
+        total_vehicles=counts_dict.get(EventType.VEHICLE_DETECTED.value, 0),
+        total_persons=counts_dict.get(EventType.PERSON_DETECTED.value, 0),
+        total_anpr=counts_dict.get(EventType.ANPR_DETECTED.value, 0),
+        total_watchlist_matches=counts_dict.get(EventType.WATCHLIST_MATCH.value, 0),
+        total_suspicious_activity=counts_dict.get(EventType.SUSPICIOUS_ACTIVITY.value, 0),
+    )
 
 
 @router.get(

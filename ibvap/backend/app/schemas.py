@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class EventType(str, Enum):
     """
-    Allowed IBVAP event types. Any incoming event with an unlisted type
+    Allowed IBVAP event types. Any incoming event or query filter with an unlisted type
     will be rejected by FastAPI/Pydantic validation with HTTP 422.
     """
     OBJECT_DETECTED = "OBJECT_DETECTED"
@@ -78,3 +78,14 @@ class EventResponse(EventBase):
     )
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class EventStatsResponse(BaseModel):
+    """Aggregated surveillance statistics for the dashboard."""
+    total_events: int = Field(0, description="Total count of all surveillance events.")
+    total_intrusions: int = Field(0, description="Count of INTRUSION_DETECTED events.")
+    total_vehicles: int = Field(0, description="Count of VEHICLE_DETECTED events.")
+    total_persons: int = Field(0, description="Count of PERSON_DETECTED events.")
+    total_anpr: int = Field(0, description="Count of ANPR_DETECTED events.")
+    total_watchlist_matches: int = Field(0, description="Count of WATCHLIST_MATCH events.")
+    total_suspicious_activity: int = Field(0, description="Count of SUSPICIOUS_ACTIVITY events.")

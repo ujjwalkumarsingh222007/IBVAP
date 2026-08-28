@@ -1,29 +1,21 @@
 """
-main.py — IBVAP Phase 1A + 1B + 1C + 1D entry point.
+main.py — IBVAP Phase 1A + 1B + 1C + 1D + 2B entry point.
 
 Responsibility
 --------------
 * Parse CLI arguments (source, confidence, model, device, tracker, no-track,
-  no-fence, fence, camera-id, backend-url, no-backend).
+  no-fence, fence, camera-id, backend-url, no-backend, no-object-events).
 * Open the video source (webcam or file) via OpenCV.
 * Drive the frame loop.
 * Phase 1A mode  (--no-track):        Detector.detect() — bounding boxes only
 * Phase 1B mode  (--no-fence):        ObjectTracker.track() — + persistent IDs
 * Phase 1C mode  (default):           IntrusionDetector.process() — + intrusion
 * Phase 1D mode  (default):           EventClient.send() — POST to backend
+* Phase 2B mode  (default):           EventAnalyzer.process() — + person/vehicle/object events
 * Call drawing helpers for detections, fence overlay, intrusion banner.
 * Display the annotated frame in a window.
-* Print per-frame summaries and intrusion events to stdout.
+* Print per-frame summaries and analytics events to stdout.
 * Exit cleanly on 'q' key press or when the source is exhausted.
-
-Detection/tracking/intrusion/adapter logic lives in their own packages.
-
-Phase compatibility
--------------------
-Phase 1A  →  python main.py --no-track
-Phase 1B  →  python main.py --no-fence      (tracking ON, fence OFF)
-Phase 1C  →  python main.py --no-backend    (full local pipeline, no HTTP)
-Phase 1D  →  python main.py                 (full pipeline + backend POST)
 """
 
 from __future__ import annotations
@@ -43,6 +35,7 @@ from intrusion import VirtualFence, IntrusionDetector, IntrusionEvent
 from intrusion.fence import DEFAULT_FENCE_POLYGON
 from adapter import EventClient
 from adapter.event_client import DEFAULT_BACKEND_URL, DEFAULT_CAMERA_ID
+from events import EventAnalyzer, AnalyticsEvent
 
 # ---------------------------------------------------------------------------
 # Logging setup — INFO to stdout, WARNING+ always visible
@@ -110,23 +103,23 @@ def _draw_stats(
     n_vehicles: int,
     tracking_enabled: bool,
     fence_enabled: bool,
+    object_events_enabled: bool,
     backend_enabled: bool,
     n_intrusions_total: int,
+    n_ai_events_total: int,
 ) -> None:
     """Draw informational stats in the top-left corner of the frame."""
     if fence_enabled:
-        # Leave the top banner row for IntrusionDetector when active;
-        # start HUD below the potential intrusion banner (40 px).
         y_start = 62
     else:
         y_start = 22
 
     if fence_enabled and backend_enabled:
-        mode_label = "TRACKING+FENCE+BACKEND"
+        mode_label = "TRACKING+FENCE+AI_EVENTS+BACKEND" if object_events_enabled else "TRACKING+FENCE+BACKEND"
     elif fence_enabled:
-        mode_label = "TRACKING+FENCE"
+        mode_label = "TRACKING+FENCE+AI_EVENTS" if object_events_enabled else "TRACKING+FENCE"
     elif tracking_enabled:
-        mode_label = "TRACKING"
+        mode_label = "TRACKING+AI_EVENTS" if object_events_enabled else "TRACKING"
     else:
         mode_label = "DETECT ONLY"
 
@@ -136,16 +129,17 @@ def _draw_stats(
         f"Vehicles:  {n_vehicles}",
         f"Mode:      {mode_label}",
         f"Intrusions:{n_intrusions_total:4d} (session)",
+        f"AI Events: {n_ai_events_total:4d} (session)",
         "Press 'q' to quit",
     ]
     y = y_start
     for line in lines:
         cv2.putText(
             frame, line, (8, y),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.50,
-            (0, 255, 255), 2, cv2.LINE_AA,
+            cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+            (0, 255, 255), 1, cv2.LINE_AA,
         )
-        y += 22
+        y += 20
 
 
 # ---------------------------------------------------------------------------
@@ -161,13 +155,14 @@ def run(
     tracking_enabled: bool,
     fence_polygon: list,
     fence_enabled: bool,
+    object_events_enabled: bool,
     backend_enabled: bool,
     backend_url: str,
     camera_id: str,
 ) -> None:
-    """Initialise detector/tracker/fence/client, open video source, run frame loop."""
+    """Initialise detector/tracker/fence/client/engine, open video source, run frame loop."""
 
-    # --- Guard: fence requires tracking --------------------------------------
+    # --- Guard: fence and object events require tracking ---------------------
     if fence_enabled and not tracking_enabled:
         print(
             "[WARN] Virtual-fence intrusion detection requires tracking. "
@@ -176,23 +171,26 @@ def run(
         )
         fence_enabled = False
 
-    # --- Guard: backend requires fence (we only send intrusion events) -------
-    if backend_enabled and not fence_enabled:
+    if object_events_enabled and not tracking_enabled:
         print(
-            "[INFO] Backend integration disabled: fence is off so no "
-            "intrusion events will be generated to send.",
+            "[WARN] Object detection events require tracking for deduplication. "
+            "Object events disabled because --no-track was used.",
+            file=sys.stderr,
+        )
+        object_events_enabled = False
+
+    # --- Guard: backend requires at least one active event source ------------
+    if backend_enabled and not fence_enabled and not object_events_enabled:
+        print(
+            "[INFO] Backend integration disabled: no active event generators "
+            "(fence and object events are both off).",
             file=sys.stderr,
         )
         backend_enabled = False
 
     # --- Initialise detector or tracker --------------------------------------
     if tracking_enabled:
-        if fence_enabled and backend_enabled:
-            phase = "1D — Tracking + Fence + Backend"
-        elif fence_enabled:
-            phase = "1C — Tracking + Virtual Fence"
-        else:
-            phase = "1B — Tracking"
+        phase = "2B — Tracking + AI Event Engine"
         print(f"[INFO] Phase {phase}  (tracker: {tracker_config})")
         print(f"[INFO] Loading model '{model_path}' with ObjectTracker …")
         try:
@@ -205,12 +203,7 @@ def run(
         except RuntimeError as exc:
             print(f"[ERROR] {exc}", file=sys.stderr)
             sys.exit(1)
-        if fence_enabled and backend_enabled:
-            window_title = "IBVAP — Phase 1D: Full Pipeline"
-        elif fence_enabled:
-            window_title = "IBVAP — Phase 1C: Virtual Fence + Intrusion Detection"
-        else:
-            window_title = "IBVAP — Phase 1B: Tracking"
+        window_title = "IBVAP — Phase 2B: Full AI Event Pipeline"
     else:
         print("[INFO] Phase 1A — detection only  (tracking disabled via --no-track)")
         print(f"[INFO] Loading model '{model_path}' …")
@@ -227,7 +220,7 @@ def run(
 
     print(f"[INFO] {processor}")
 
-    # --- Initialise fence and intrusion detector -----------------------------
+    # --- Initialise fence and intrusion detector (Phase 1C) ------------------
     fence: Optional[VirtualFence] = None
     intr:  Optional[IntrusionDetector] = None
 
@@ -235,6 +228,12 @@ def run(
         fence = VirtualFence(fence_polygon)
         intr  = IntrusionDetector(fence)
         print(f"[INFO] Virtual fence: {fence}")
+
+    # --- Initialise AI Event Engine (Phase 2B) -------------------------------
+    event_analyzer: Optional[EventAnalyzer] = None
+    if object_events_enabled and tracking_enabled:
+        event_analyzer = EventAnalyzer()
+        print(f"[INFO] AI Event Engine initialized: {event_analyzer}")
 
     # --- Initialise backend event client (Phase 1D) --------------------------
     client: Optional[EventClient] = None
@@ -247,7 +246,7 @@ def run(
         print(f"[INFO] Backend client: {client}")
         print(f"[INFO] Events will be POSTed to: {backend_url}/api/v1/events")
     else:
-        print("[INFO] Backend integration disabled (--no-backend or fence off).")
+        print("[INFO] Backend integration disabled (--no-backend or no events enabled).")
 
     # --- Open video source ---------------------------------------------------
     print(f"[INFO] Opening source: '{source}' …")
@@ -263,6 +262,7 @@ def run(
     fps_display      = 0.0
     t_prev           = time.perf_counter()
     total_intrusions = 0   # session counter
+    total_ai_events  = 0   # session counter
 
     print("[INFO] Running.  Press 'q' in the video window to quit.\n")
 
@@ -278,6 +278,29 @@ def run(
         else:
             detections = processor.detect(frame)                          # type: ignore
 
+        # --- Phase 2B: Person, Vehicle, Object Analytics Events --------------
+        if object_events_enabled and event_analyzer is not None:
+            analytics_events: List[AnalyticsEvent] = event_analyzer.process(detections)
+            total_ai_events += len(analytics_events)
+
+            for a_ev in analytics_events:
+                print(f"\n[AI EVENT — Phase 2B: {a_ev.event_type}]")
+                print(json.dumps(a_ev.as_dict(), indent=2))
+
+                if backend_enabled and client is not None:
+                    result = client.send(a_ev)
+                    if result.success:
+                        print(
+                            f"[Phase 2B] ✓ {a_ev.event_type} sent  "
+                            f"track_id={a_ev.track_id}  status={result.status_code}"
+                        )
+                    else:
+                        print(
+                            f"[Phase 2B] ✗ Send failed  "
+                            f"track_id={a_ev.track_id}  {result.message}",
+                            file=sys.stderr,
+                        )
+
         # --- Phase 1C: intrusion detection -----------------------------------
         frame_events: List[IntrusionEvent] = []
         if fence_enabled and intr is not None and fence is not None:
@@ -289,22 +312,20 @@ def run(
                 print("\n[INTRUSION EVENT — Phase 1C]")
                 print(json.dumps(ev.as_dict(), indent=2))
 
-        # --- Phase 1D: send to backend ---------------------------------------
-        # Only fires when Phase 1C produces a NEW event (no per-frame spam).
-        if backend_enabled and client is not None and frame_events:
-            for ev in frame_events:
-                result = client.send(ev)
-                if result.success:
-                    print(
-                        f"[Phase 1D] ✓ Event sent  "
-                        f"track_id={ev.track_id}  status={result.status_code}"
-                    )
-                else:
-                    print(
-                        f"[Phase 1D] ✗ Send failed  "
-                        f"track_id={ev.track_id}  {result.message}",
-                        file=sys.stderr,
-                    )
+                # --- Phase 1D: send intrusion to backend ---------------------
+                if backend_enabled and client is not None:
+                    result = client.send(ev)
+                    if result.success:
+                        print(
+                            f"[Phase 1D] ✓ INTRUSION_DETECTED sent  "
+                            f"track_id={ev.track_id}  status={result.status_code}"
+                        )
+                    else:
+                        print(
+                            f"[Phase 1D] ✗ Send failed  "
+                            f"track_id={ev.track_id}  {result.message}",
+                            file=sys.stderr,
+                        )
 
         # --- Draw detections (bounding boxes, labels, track IDs) ------------
         Detector.draw_detections(frame, detections, show_confidence=True)
@@ -343,8 +364,8 @@ def run(
 
         _draw_stats(
             frame, fps_display, n_persons, n_vehicles,
-            tracking_enabled, fence_enabled, backend_enabled,
-            total_intrusions,
+            tracking_enabled, fence_enabled, object_events_enabled,
+            backend_enabled, total_intrusions, total_ai_events,
         )
 
         # --- Console: per-frame detection summary ----------------------------
@@ -367,7 +388,10 @@ def run(
     # --- Clean up ------------------------------------------------------------
     cap.release()
     cv2.destroyAllWindows()
-    print(f"[INFO] Done.  Session intrusion events: {total_intrusions}")
+    print(
+        f"[INFO] Done. Session intrusions: {total_intrusions}, "
+        f"AI analytics events: {total_ai_events}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -398,7 +422,7 @@ def _parse_fence(raw: str) -> list:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="main.py",
-        description="IBVAP Phase 1D — Full CV Pipeline with Backend Integration",
+        description="IBVAP Phase 2B — Complete AI Event Engine + Tracking + Virtual Fence",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     # ---- Phase 1A flags (unchanged) ----
@@ -453,14 +477,14 @@ def _build_parser() -> argparse.ArgumentParser:
             "Defaults to DEFAULT_FENCE_POLYGON in intrusion/fence.py."
         ),
     )
-    # ---- Phase 1D flags (new) ----
+    # ---- Phase 1D flags (unchanged) ----
     parser.add_argument(
         "--no-backend",
         action="store_true",
         default=False,
         help=(
-            "Disable HTTP backend integration.  Detection, tracking, "
-            "and intrusion detection continue; events are NOT POSTed."
+            "Disable HTTP backend integration. Detection, tracking, "
+            "and event generation continue; events are NOT POSTed."
         ),
     )
     parser.add_argument(
@@ -472,6 +496,16 @@ def _build_parser() -> argparse.ArgumentParser:
         "--camera-id",
         default=DEFAULT_CAMERA_ID,
         help="Camera identifier included in every Common Event payload.",
+    )
+    # ---- Phase 2B flags (new) ----
+    parser.add_argument(
+        "--no-object-events",
+        action="store_true",
+        default=False,
+        help=(
+            "Disable detection analytics events (PERSON_DETECTED, VEHICLE_DETECTED, "
+            "OBJECT_DETECTED). INTRUSION_DETECTED events remain active."
+        ),
     )
     return parser
 
@@ -491,6 +525,7 @@ if __name__ == "__main__":
         tracking_enabled=not args.no_track,
         fence_polygon=fence_poly,
         fence_enabled=not args.no_fence,
+        object_events_enabled=not args.no_object_events,
         backend_enabled=not args.no_backend,
         backend_url=args.backend_url,
         camera_id=args.camera_id,
