@@ -5,6 +5,8 @@
 > **Phase 1B Pipeline:** Detection → ByteTrack → Persistent Track IDs
 >
 > **Phase 1C Pipeline:** Tracking → Virtual Fence → Intrusion Detection → Structured Event
+>
+> **Phase 1D Pipeline:** Structured Intrusion Event → HTTP Adapter → POST `/api/v1/events` (Member 3 Backend)
 
 ---
 
@@ -42,15 +44,28 @@
 > It does **not** mean *"a specific person has been identified."*
 > Track IDs are motion-based, not biometric.
 
+### Phase 1D — Backend Event Integration
+* Everything Phase 1C does, **plus**:
+* Includes an isolated, lightweight HTTP client (`adapter/event_client.py`) using Python's standard library (`urllib.request`).
+* Maps Phase 1C `IntrusionEvent` to the agreed **IBVAP Common Event JSON schema**.
+* Maps `event_type` to **`INTRUSION_DETECTED`**.
+* Packs `track_id`, `class_name`, `bbox` `[x1, y1, x2, y2]`, and `position` `{"x": ..., "y": ...}` inside `metadata`.
+* Attaches a configurable `camera_id` (default `CAM-01`) and ISO-8601 UTC timestamp.
+* HTTP `POST`s the event to `http://127.0.0.1:8000/api/v1/events`.
+* **Zero crash guarantee:** if the backend is down, connection refused, or returns HTTP 4xx/5xx errors, the CV process logs a warning and continues smoothly.
+
 ---
 
 ## Directory structure
 
 ```
 ai/member1_cv/
+├── adapter/
+│   ├── __init__.py         # package export
+│   └── event_client.py     # EventClient — Common Event HTTP adapter (Phase 1D)
 ├── detection/
 │   ├── __init__.py         # package export
-│   └── detector.py         # Detector class, DetectionResult, BoundingBox
+│   └── detector.py         # Detector class, DetectionResult, BoundingBox (Phase 1A)
 ├── tracking/
 │   ├── __init__.py         # package export
 │   └── tracker.py          # ObjectTracker class (Phase 1B)
@@ -62,8 +77,9 @@ ai/member1_cv/
 ├── tests/
 │   ├── test_detector.py    # Phase 1A unit tests  (13 tests)
 │   ├── test_tracker.py     # Phase 1B unit tests  (18 tests)
-│   └── test_intrusion.py   # Phase 1C unit tests  (41 tests)
-├── main.py                 # CLI entry point / video loop
+│   ├── test_intrusion.py   # Phase 1C unit tests  (41 tests)
+│   └── test_event_client.py# Phase 1D unit tests  (31 tests)
+├── main.py                 # CLI entry point / video loop (all phases)
 ├── requirements.txt
 └── README.md
 ```
@@ -119,36 +135,38 @@ python main.py --model models/custom.pt # local weights file
 
 ## Running
 
-### Phase 1C — Webcam with virtual fence + intrusion detection (default)
+### Phase 1D — Full Pipeline with Backend Integration (default)
 
 ```bash
+# Webcam stream, default camera CAM-01, default backend http://127.0.0.1:8000
 python main.py
+
+# Video file stream
+python main.py --source path/to/video.mp4
+
+# Custom camera ID and custom backend URL
+python main.py --camera-id CAM-NORTH-GATE --backend-url http://192.168.1.100:8000
 ```
 
-### Phase 1C — Video file with virtual fence
+### Phase 1C — Local only (no backend transmission)
 
 ```bash
-python main.py --source path/to/video.mp4
+python main.py --no-backend
+python main.py --source path/to/video.mp4 --no-backend
 ```
 
-### Phase 1B — Tracking only (no fence)
+### Phase 1B — Tracking only (no fence, no backend)
 
 ```bash
 python main.py --no-fence
 python main.py --source path/to/video.mp4 --no-fence
 ```
 
-### Phase 1A — Detection only (no tracking, no fence)
+### Phase 1A — Detection only (no tracking, no fence, no backend)
 
 ```bash
 python main.py --no-track
 python main.py --source path/to/video.mp4 --no-track
-```
-
-### Specific webcam index
-
-```bash
-python main.py --source 1
 ```
 
 ### Custom fence polygon via CLI
@@ -172,138 +190,96 @@ python main.py --source video.mp4 --fence "50,50;300,50;300,300;50,300"
 | `--tracker` | — | `bytetrack.yaml` | Tracker config (Phase 1B) |
 | `--no-track` | — | off | Phase 1A detection-only mode |
 | `--no-fence` | — | off | Disable virtual fence (Phase 1B mode) |
-| `--fence` | — | DEFAULT_FENCE_POLYGON | Custom polygon `"x1,y1;x2,y2;..."` |
+| `--fence` | — | `DEFAULT_FENCE_POLYGON` | Custom polygon `"x1,y1;x2,y2;..."` |
+| `--no-backend` | — | off | Disable HTTP backend POST (Phase 1C mode) |
+| `--backend-url` | — | `http://127.0.0.1:8000` | Base URL of Member 3's backend |
+| `--camera-id` | — | `CAM-01` | Camera identifier included in events |
 
 ---
 
-## Changing the confidence threshold
+## Common Event HTTP Contract (Phase 1D)
 
-```bash
-python main.py --confidence 0.25   # more permissive
-python main.py --confidence 0.60   # stricter
-```
+When an intrusion occurs, the adapter sends:
 
----
+* **Method:** `POST`
+* **URL:** `http://127.0.0.1:8000/api/v1/events`
+* **Content-Type:** `application/json`
+* **Auth:** None (Phase 1D)
 
-## Tracking algorithm
+### Request Payload Format
 
-**ByteTrack** — a lightweight, state-of-the-art multi-object tracker that works by associating every detection (not just high-confidence ones) with existing tracks using an IoU-based matching strategy.
-
-It is bundled inside Ultralytics and requires no separate installation beyond `lap`.
-
-An alternative tracker available in Ultralytics is **BoT-SORT**:
-
-```bash
-python main.py --tracker botsort.yaml
-```
-
----
-
-## What Track IDs mean
-
-| Statement | True / False |
-|-----------|-------------|
-| The same ID appears for the same person across consecutive frames | **True** (when tracker is confident) |
-| IDs never change | **False** — IDs may change after long occlusion |
-| An ID identifies a specific person permanently | **False** — no facial recognition is performed |
-| IDs restart at 1 every frame | **False** — IDs are global across the entire run |
-
----
-
-## What an intrusion event means
-
-An **intrusion event** is generated when a tracked object's bounding-box centre crosses from outside to inside the configured restricted polygon.
-
-| Statement | True / False |
-|-----------|-------------|
-| One event per entry episode | **True** |
-| New event while same object stays inside | **False** — silenced after first event |
-| New event after object exits and re-enters | **True** |
-| Event identifies a specific person biometrically | **False** — position-based only |
-
----
-
-## Expected output
-
-### Video window (Phase 1C)
-
-* Colour-coded bounding boxes with `#ID class confidence` labels
-* **OUTSIDE** / **IN ZONE** status badge below each tracked box
-* Centre dot: green = outside, red = inside fence
-* Orange fence polygon outline with "RESTRICTED ZONE" label
-* Red banner `!! INTRUSION !!  ID:7 person` on frames where crossing occurs
-* Top-left HUD: FPS, person count, vehicle count, mode, session intrusion count
-
-### Console (per frame)
-
-```
-Frame 00041 | FPS  27.8 | persons=1 vehicles=0
-   {'class_name': 'person', 'confidence': 0.9312, 'bbox': {...}, 'track_id': 7}
-
-[INTRUSION EVENT]
+```json
 {
-  "event_type": "INTRUSION",
-  "track_id": 7,
-  "class_name": "person",
-  "confidence": 0.9312,
-  "timestamp": "2026-08-28T12:55:03.123456+00:00",
-  "bbox": {"x1": 200, "y1": 150, "x2": 400, "y2": 350},
-  "position": {"x": 300, "y": 250}
+  "camera_id": "CAM-01",
+  "event_type": "INTRUSION_DETECTED",
+  "timestamp": "2026-08-28T10:00:00.123456+00:00",
+  "confidence": 0.9412,
+  "metadata": {
+    "track_id": 17,
+    "class_name": "person",
+    "bbox": [120, 80, 300, 450],
+    "position": {
+      "x": 210,
+      "y": 265
+    }
+  }
 }
 ```
 
-### Exit
+### Schema Mapping
 
-Press **`q`** in the video window to quit cleanly.
+| Phase 1C Internal Field | Phase 1D Common Event Field | Note |
+|-------------------------|-----------------------------|------|
+| *(configured)* | `camera_id` | Top-level string (e.g. `CAM-01`) |
+| `event_type` (`"INTRUSION"`) | `event_type` (`"INTRUSION_DETECTED"`) | Mapped to agreed IBVAP enum |
+| `timestamp` | `timestamp` | ISO-8601 UTC timestamp string |
+| `confidence` | `confidence` | Float (0.0 – 1.0) |
+| `track_id` | `metadata.track_id` | Integer track ID inside metadata |
+| `class_name` | `metadata.class_name` | String (`person`, `car`, etc.) |
+| `bbox` `{x1,y1,x2,y2}` | `metadata.bbox` `[x1, y1, x2, y2]` | Converted to 4-element list |
+| `position` `{x, y}` | `metadata.position` `{"x": .., "y": ..}` | Dict with centre coordinates |
 
 ---
 
-## Configuring the virtual fence
+## Error Handling & Backend Unavailable Behavior
 
-### Option A — Edit the constant (default)
-
-Open [`intrusion/fence.py`](intrusion/fence.py) and change `DEFAULT_FENCE_POLYGON`:
-
-```python
-DEFAULT_FENCE_POLYGON: Polygon = [
-    (200, 100),   # top-left
-    (600, 100),   # top-right
-    (600, 400),   # bottom-right
-    (200, 400),   # bottom-left
-]
-```
-
-### Option B — CLI argument
-
-```bash
-python main.py --fence "200,100;600,100;600,400;200,400"
-```
-
-Format: `"x1,y1;x2,y2;x3,y3;..."` (at least 3 vertices, semicolon-separated).
+* **HTTP 2xx:** Accepted as success.
+* **HTTP 400 / 404 / 422 / 500:** Caught and logged with status code and response body details. No crash.
+* **Connection Refused / Network Down:** Caught gracefully, warning logged, CV loop continues unaffected.
+* **Timeout (default 5.0s):** Caught, warning logged, CV loop does not freeze.
 
 ---
 
 ## Running the tests
 
 ```bash
-# All tests (Phase 1A + 1B + 1C)
+# Run all 103 unit tests (Phase 1A + 1B + 1C + 1D)
 pytest tests/ -v
 
-# By phase
-pytest tests/test_detector.py -v    # Phase 1A — 13 tests
-pytest tests/test_tracker.py -v     # Phase 1B — 18 tests
-pytest tests/test_intrusion.py -v   # Phase 1C — 41 tests
+# Run tests by phase
+pytest tests/test_detector.py -v     # Phase 1A — 13 tests
+pytest tests/test_tracker.py -v      # Phase 1B — 18 tests
+pytest tests/test_intrusion.py -v    # Phase 1C — 41 tests
+pytest tests/test_event_client.py -v # Phase 1D — 31 tests
 ```
 
-Tests use synthetic numpy frames — no webcam, video file, or model needed for Phase 1C tests.
+Tests use synthetic frames and mocks — no webcam, video file, YOLO weights, or running backend server needed.
 
 ---
 
-## Design decisions for future phases
+## Manual Integration Test with Member 3 Backend
 
-| Phase | Extension point |
-|-------|----------------|
-| **1D** — CEF / Backend | `IntrusionEvent.as_dict()` already matches the output contract; Phase 1D wraps it in CEF and POSTs to FastAPI |
+1. Start Member 3's backend server (e.g., `uvicorn app.main:app --port 8000`).
+2. Run Member 1's CV module:
+   ```bash
+   python main.py
+   ```
+3. Move into the virtual fence restricted area.
+4. Verify the console displays:
+   ```
+   [Phase 1D] ✓ Event sent  track_id=1  status=200
+   ```
+5. Confirm in Member 3's backend logs / database that the event was received and persisted.
 
 ---
 
@@ -315,6 +291,5 @@ Tests use synthetic numpy frames — no webcam, video file, or model needed for 
 * **Fence is pixel-based** — coordinates are absolute pixels, not relative or geo-referenced.
 * **Centre-point check only** — only the bounding-box centre is tested; a partially overlapping object is not yet flagged.
 * **YOLOv8n accuracy** — the nano model is fast but less accurate; use `yolov8s.pt` for better results.
-* **Display requires a screen** — headless servers need the `cv2.imshow` path replaced; addressed in Phase 1D.
+* **Display requires a screen** — headless servers need `--no-fence` or headless mode when running in headless containers.
 * **No facial or person recognition** — Track IDs and intrusion events are purely positional/motion-based.
-

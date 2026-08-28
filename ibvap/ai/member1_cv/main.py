@@ -1,36 +1,36 @@
 """
-main.py — IBVAP Phase 1A + 1B + 1C entry point.
+main.py — IBVAP Phase 1A + 1B + 1C + 1D entry point.
 
 Responsibility
 --------------
 * Parse CLI arguments (source, confidence, model, device, tracker, no-track,
-  no-fence, fence).
+  no-fence, fence, camera-id, backend-url, no-backend).
 * Open the video source (webcam or file) via OpenCV.
 * Drive the frame loop.
-* Phase 1A mode  (--no-track):    Detector.detect()  — bounding boxes only
-* Phase 1B mode  (default):       ObjectTracker.track() — + persistent IDs
-* Phase 1C mode  (default+fence): IntrusionDetector.process() — + intrusion
-* Call Detector.draw_detections() to overlay detection boxes (unchanged).
-* Call VirtualFence.draw() to render the restricted zone polygon.
-* Call IntrusionDetector.draw_intrusion_overlay() for the red banner.
+* Phase 1A mode  (--no-track):        Detector.detect() — bounding boxes only
+* Phase 1B mode  (--no-fence):        ObjectTracker.track() — + persistent IDs
+* Phase 1C mode  (default):           IntrusionDetector.process() — + intrusion
+* Phase 1D mode  (default):           EventClient.send() — POST to backend
+* Call drawing helpers for detections, fence overlay, intrusion banner.
 * Display the annotated frame in a window.
 * Print per-frame summaries and intrusion events to stdout.
 * Exit cleanly on 'q' key press or when the source is exhausted.
 
-Detection/tracking/intrusion logic lives in their own packages — NOT here.
+Detection/tracking/intrusion/adapter logic lives in their own packages.
 
 Phase compatibility
 -------------------
 Phase 1A  →  python main.py --no-track
 Phase 1B  →  python main.py --no-fence      (tracking ON, fence OFF)
-Phase 1C  →  python main.py                 (tracking + fence, default)
-Phase 1D  →  will forward IntrusionEvent.as_dict() to FastAPI
+Phase 1C  →  python main.py --no-backend    (full local pipeline, no HTTP)
+Phase 1D  →  python main.py                 (full pipeline + backend POST)
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 import time
 from typing import List, Optional, Union
@@ -41,6 +41,18 @@ from detection import Detector, DetectionResult
 from tracking import ObjectTracker
 from intrusion import VirtualFence, IntrusionDetector, IntrusionEvent
 from intrusion.fence import DEFAULT_FENCE_POLYGON
+from adapter import EventClient
+from adapter.event_client import DEFAULT_BACKEND_URL, DEFAULT_CAMERA_ID
+
+# ---------------------------------------------------------------------------
+# Logging setup — INFO to stdout, WARNING+ always visible
+# ---------------------------------------------------------------------------
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
 
 # ---------------------------------------------------------------------------
 # Default configuration — override via CLI flags
@@ -98,6 +110,7 @@ def _draw_stats(
     n_vehicles: int,
     tracking_enabled: bool,
     fence_enabled: bool,
+    backend_enabled: bool,
     n_intrusions_total: int,
 ) -> None:
     """Draw informational stats in the top-left corner of the frame."""
@@ -108,9 +121,15 @@ def _draw_stats(
     else:
         y_start = 22
 
-    mode_label = "TRACKING+FENCE" if fence_enabled else (
-        "TRACKING" if tracking_enabled else "DETECT ONLY"
-    )
+    if fence_enabled and backend_enabled:
+        mode_label = "TRACKING+FENCE+BACKEND"
+    elif fence_enabled:
+        mode_label = "TRACKING+FENCE"
+    elif tracking_enabled:
+        mode_label = "TRACKING"
+    else:
+        mode_label = "DETECT ONLY"
+
     lines = [
         f"FPS:       {fps:5.1f}",
         f"Persons:   {n_persons}",
@@ -142,21 +161,38 @@ def run(
     tracking_enabled: bool,
     fence_polygon: list,
     fence_enabled: bool,
+    backend_enabled: bool,
+    backend_url: str,
+    camera_id: str,
 ) -> None:
-    """Initialise detector/tracker/fence, open video source, run frame loop."""
+    """Initialise detector/tracker/fence/client, open video source, run frame loop."""
 
     # --- Guard: fence requires tracking --------------------------------------
     if fence_enabled and not tracking_enabled:
         print(
-            "[WARN] --no-fence implied: virtual-fence intrusion detection "
-            "requires tracking (--no-track disables it).",
+            "[WARN] Virtual-fence intrusion detection requires tracking. "
+            "Fence disabled because --no-track was used.",
             file=sys.stderr,
         )
         fence_enabled = False
 
+    # --- Guard: backend requires fence (we only send intrusion events) -------
+    if backend_enabled and not fence_enabled:
+        print(
+            "[INFO] Backend integration disabled: fence is off so no "
+            "intrusion events will be generated to send.",
+            file=sys.stderr,
+        )
+        backend_enabled = False
+
     # --- Initialise detector or tracker --------------------------------------
     if tracking_enabled:
-        phase = "1C — Tracking + Virtual Fence" if fence_enabled else "1B — Tracking"
+        if fence_enabled and backend_enabled:
+            phase = "1D — Tracking + Fence + Backend"
+        elif fence_enabled:
+            phase = "1C — Tracking + Virtual Fence"
+        else:
+            phase = "1B — Tracking"
         print(f"[INFO] Phase {phase}  (tracker: {tracker_config})")
         print(f"[INFO] Loading model '{model_path}' with ObjectTracker …")
         try:
@@ -169,11 +205,12 @@ def run(
         except RuntimeError as exc:
             print(f"[ERROR] {exc}", file=sys.stderr)
             sys.exit(1)
-        window_title = (
-            "IBVAP — Phase 1C: Virtual Fence + Intrusion Detection"
-            if fence_enabled
-            else "IBVAP — Phase 1B: Tracking"
-        )
+        if fence_enabled and backend_enabled:
+            window_title = "IBVAP — Phase 1D: Full Pipeline"
+        elif fence_enabled:
+            window_title = "IBVAP — Phase 1C: Virtual Fence + Intrusion Detection"
+        else:
+            window_title = "IBVAP — Phase 1B: Tracking"
     else:
         print("[INFO] Phase 1A — detection only  (tracking disabled via --no-track)")
         print(f"[INFO] Loading model '{model_path}' …")
@@ -192,12 +229,25 @@ def run(
 
     # --- Initialise fence and intrusion detector -----------------------------
     fence: Optional[VirtualFence] = None
-    intr: Optional[IntrusionDetector] = None
+    intr:  Optional[IntrusionDetector] = None
 
     if fence_enabled:
         fence = VirtualFence(fence_polygon)
         intr  = IntrusionDetector(fence)
         print(f"[INFO] Virtual fence: {fence}")
+
+    # --- Initialise backend event client (Phase 1D) --------------------------
+    client: Optional[EventClient] = None
+
+    if backend_enabled:
+        client = EventClient(
+            backend_url=backend_url,
+            camera_id=camera_id,
+        )
+        print(f"[INFO] Backend client: {client}")
+        print(f"[INFO] Events will be POSTed to: {backend_url}/api/v1/events")
+    else:
+        print("[INFO] Backend integration disabled (--no-backend or fence off).")
 
     # --- Open video source ---------------------------------------------------
     print(f"[INFO] Opening source: '{source}' …")
@@ -209,10 +259,10 @@ def run(
     print(f"[INFO] Stream: {width}×{height} @ {src_fps:.1f} FPS (source)")
 
     # --- Frame loop ----------------------------------------------------------
-    frame_idx          = 0
-    fps_display        = 0.0
-    t_prev             = time.perf_counter()
-    total_intrusions   = 0   # session counter
+    frame_idx        = 0
+    fps_display      = 0.0
+    t_prev           = time.perf_counter()
+    total_intrusions = 0   # session counter
 
     print("[INFO] Running.  Press 'q' in the video window to quit.\n")
 
@@ -224,9 +274,9 @@ def run(
 
         # --- Inference -------------------------------------------------------
         if tracking_enabled:
-            detections: List[DetectionResult] = processor.track(frame)          # type: ignore
+            detections: List[DetectionResult] = processor.track(frame)   # type: ignore
         else:
-            detections = processor.detect(frame)                                 # type: ignore
+            detections = processor.detect(frame)                          # type: ignore
 
         # --- Phase 1C: intrusion detection -----------------------------------
         frame_events: List[IntrusionEvent] = []
@@ -234,10 +284,27 @@ def run(
             frame_events = intr.process(detections)
             total_intrusions += len(frame_events)
 
-            # Console: print events only on the frame they occur
+            # Console: print Phase 1C event on the frame they occur
             for ev in frame_events:
-                print("\n[INTRUSION EVENT]")
+                print("\n[INTRUSION EVENT — Phase 1C]")
                 print(json.dumps(ev.as_dict(), indent=2))
+
+        # --- Phase 1D: send to backend ---------------------------------------
+        # Only fires when Phase 1C produces a NEW event (no per-frame spam).
+        if backend_enabled and client is not None and frame_events:
+            for ev in frame_events:
+                result = client.send(ev)
+                if result.success:
+                    print(
+                        f"[Phase 1D] ✓ Event sent  "
+                        f"track_id={ev.track_id}  status={result.status_code}"
+                    )
+                else:
+                    print(
+                        f"[Phase 1D] ✗ Send failed  "
+                        f"track_id={ev.track_id}  {result.message}",
+                        file=sys.stderr,
+                    )
 
         # --- Draw detections (bounding boxes, labels, track IDs) ------------
         Detector.draw_detections(frame, detections, show_confidence=True)
@@ -247,17 +314,15 @@ def run(
             for det in detections:
                 if det.track_id is not None:
                     inside = intr.is_inside(det.track_id)
-                    # centre dot
                     center = VirtualFence.bbox_center(
                         det.bbox.x1, det.bbox.y1, det.bbox.x2, det.bbox.y2
                     )
                     VirtualFence.draw_center_point(frame, center, inside)
-                    # status badge below the box
                     IntrusionDetector.draw_zone_status(frame, det, inside)
 
         # --- Draw virtual fence polygon --------------------------------------
         if fence_enabled and fence is not None:
-            any_inside = fence_enabled and intr is not None and any(
+            any_inside = intr is not None and any(
                 intr.is_inside(d.track_id)
                 for d in detections
                 if d.track_id is not None
@@ -278,7 +343,8 @@ def run(
 
         _draw_stats(
             frame, fps_display, n_persons, n_vehicles,
-            tracking_enabled, fence_enabled, total_intrusions,
+            tracking_enabled, fence_enabled, backend_enabled,
+            total_intrusions,
         )
 
         # --- Console: per-frame detection summary ----------------------------
@@ -312,8 +378,6 @@ def _parse_fence(raw: str) -> list:
     """
     Parse a CLI polygon string like "200,100;600,100;600,400;200,400" into
     a list of (x, y) tuples.
-
-    Raises argparse.ArgumentTypeError on bad input.
     """
     try:
         points = []
@@ -334,10 +398,10 @@ def _parse_fence(raw: str) -> list:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="main.py",
-        description="IBVAP Phase 1C — Person & Vehicle Detection + Tracking + Virtual Fence",
+        description="IBVAP Phase 1D — Full CV Pipeline with Backend Integration",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    # Phase 1A flags (unchanged)
+    # ---- Phase 1A flags (unchanged) ----
     parser.add_argument(
         "--source", "-s",
         default=DEFAULT_SOURCE,
@@ -359,7 +423,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default="",
         help='Inference device: "cpu", "cuda", "mps", or "" to auto-select.',
     )
-    # Phase 1B flags (unchanged)
+    # ---- Phase 1B flags (unchanged) ----
     parser.add_argument(
         "--tracker",
         default=DEFAULT_TRACKER,
@@ -371,7 +435,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Disable tracking — run Phase 1A detection-only mode.",
     )
-    # Phase 1C flags (new, optional)
+    # ---- Phase 1C flags (unchanged) ----
     parser.add_argument(
         "--no-fence",
         action="store_true",
@@ -388,6 +452,26 @@ def _build_parser() -> argparse.ArgumentParser:
             "Example: --fence '200,100;600,100;600,400;200,400'.  "
             "Defaults to DEFAULT_FENCE_POLYGON in intrusion/fence.py."
         ),
+    )
+    # ---- Phase 1D flags (new) ----
+    parser.add_argument(
+        "--no-backend",
+        action="store_true",
+        default=False,
+        help=(
+            "Disable HTTP backend integration.  Detection, tracking, "
+            "and intrusion detection continue; events are NOT POSTed."
+        ),
+    )
+    parser.add_argument(
+        "--backend-url",
+        default=DEFAULT_BACKEND_URL,
+        help="Base URL of the Member 3 backend.",
+    )
+    parser.add_argument(
+        "--camera-id",
+        default=DEFAULT_CAMERA_ID,
+        help="Camera identifier included in every Common Event payload.",
     )
     return parser
 
@@ -407,4 +491,7 @@ if __name__ == "__main__":
         tracking_enabled=not args.no_track,
         fence_polygon=fence_poly,
         fence_enabled=not args.no_fence,
+        backend_enabled=not args.no_backend,
+        backend_url=args.backend_url,
+        camera_id=args.camera_id,
     )
