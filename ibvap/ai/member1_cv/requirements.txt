@@ -1,7 +1,10 @@
-# Phase 1A — core dependencies only
+# Phase 1A — core dependencies
 ultralytics>=8.2.0      # YOLO inference (auto-downloads model weights on first run)
 opencv-python>=4.9.0    # video capture, drawing, display
 numpy>=1.24.0           # frame arrays
+
+# Phase 1B — tracking (ByteTrack is bundled with Ultralytics; lap is its dep)
+lap>=0.5.12             # Linear Assignment Problem solver used by ByteTrack
 
 # Testing
 pytest>=8.0.0
