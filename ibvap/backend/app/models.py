@@ -37,3 +37,34 @@ class Event(Base):
             f"<Event(id={self.id}, camera_id='{self.camera_id}', "
             f"event_type='{self.event_type}', confidence={self.confidence})>"
         )
+
+
+class Camera(Base):
+    """
+    Camera model representing a physical/virtual video surveillance stream.
+    """
+
+    __tablename__ = "cameras"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    camera_id = Column(String(64), unique=True, index=True, nullable=False)
+    name = Column(String(128), nullable=False)
+    location = Column(String(256), nullable=True)
+    status = Column(String(32), default="ONLINE", nullable=False)
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<Camera(id={self.id}, camera_id='{self.camera_id}', "
+            f"name='{self.name}', status='{self.status}')>"
+        )

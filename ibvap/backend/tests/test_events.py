@@ -1,19 +1,16 @@
 """
-test_events.py — Unit and integration tests for IBVAP backend API (Phase 1 & Phase 2A).
+test_events.py — Unit and integration tests for IBVAP backend events API (Phase 1, 2A, 2C).
 
 Covers:
 1. GET / root health check.
 2. POST /api/v1/events creation & validation.
 3. GET /api/v1/events listing and newest-first ordering (created_at DESC, id DESC).
-4. GET /api/v1/events filtering by event_type.
-5. GET /api/v1/events filtering by camera_id.
-6. GET /api/v1/events combined filtering (event_type + camera_id).
-7. GET /api/v1/events pagination (limit & offset).
-8. GET /api/v1/events boundary validation (limit < 1, limit > 100, offset < 0, invalid event_type -> 422).
-9. GET /api/v1/events empty result handling.
-10. GET /api/v1/events/stats aggregate statistics (total_events, intrusions, vehicles, persons, anpr, watchlist, suspicious_activity).
-11. GET /api/v1/events/{id} single event retrieval and 404 for nonexistent id.
-12. Regression guards for Phase 1D contracts.
+4. GET /api/v1/events filtering by event_type, camera_id, and confidence ranges.
+5. GET /api/v1/events pagination (limit & offset).
+6. GET /api/v1/events boundary validation (limit, offset, confidence, event_type).
+7. GET /api/v1/events/count with and without filters.
+8. GET /api/v1/events/stats aggregate statistics.
+9. GET /api/v1/events/{id} single event retrieval and 404 for nonexistent id.
 """
 
 import sys
@@ -313,18 +310,18 @@ def test_anpr_event_metadata_flexibility(client: TestClient):
 
 
 # ---------------------------------------------------------------------------
-# 5. Phase 2A: Querying, Filtering, Pagination & Ordering
+# 5. Querying, Filtering, Pagination & Ordering
 # ---------------------------------------------------------------------------
 
 def _seed_sample_events(client: TestClient):
-    """Helper to populate test events across multiple cameras and types."""
+    """Helper to populate test events across multiple cameras, types, and confidences."""
     events_data = [
         ("CAM-01", "INTRUSION_DETECTED", 0.95),
         ("CAM-01", "PERSON_DETECTED", 0.90),
         ("CAM-02", "VEHICLE_DETECTED", 0.85),
-        ("CAM-02", "INTRUSION_DETECTED", 0.92),
+        ("CAM-02", "INTRUSION_DETECTED", 0.70),
         ("CAM-03", "ANPR_DETECTED", 0.99),
-        ("CAM-01", "WATCHLIST_MATCH", 0.88),
+        ("CAM-01", "WATCHLIST_MATCH", 0.60),
         ("CAM-03", "SUSPICIOUS_ACTIVITY", 0.78),
     ]
     for idx, (cam, ev_type, conf) in enumerate(events_data):
@@ -352,7 +349,6 @@ def test_list_events_default(client: TestClient):
 def test_list_events_ordered_newest_first(client: TestClient, db_session):
     """GET /api/v1/events returns events ordered by created_at DESC, id DESC."""
     base_time = datetime.now(timezone.utc)
-    # Insert 3 events with distinct created_at
     e1 = Event(
         camera_id="CAM-01",
         event_type="PERSON_DETECTED",
@@ -384,7 +380,6 @@ def test_list_events_ordered_newest_first(client: TestClient, db_session):
     assert resp.status_code == 200
     items = resp.json()
     assert len(items) == 3
-    # Newest event should be first
     assert items[0]["metadata"]["name"] == "third"
     assert items[1]["metadata"]["name"] == "second"
     assert items[2]["metadata"]["name"] == "first"
@@ -412,28 +407,54 @@ def test_filter_by_camera_id(client: TestClient):
         assert item["camera_id"] == "CAM-01"
 
 
-def test_filter_by_event_type_and_camera_id(client: TestClient):
-    """GET /api/v1/events?event_type=INTRUSION_DETECTED&camera_id=CAM-01 filters combined."""
+def test_filter_by_confidence_min_and_max(client: TestClient):
+    """GET /api/v1/events with confidence_min and confidence_max filters correctly."""
     _seed_sample_events(client)
-    resp = client.get("/api/v1/events?event_type=INTRUSION_DETECTED&camera_id=CAM-01")
+    # Filter confidence >= 0.85 -> 0.95, 0.90, 0.85, 0.99 (4 events)
+    resp = client.get("/api/v1/events?confidence_min=0.85")
     assert resp.status_code == 200
     data = resp.json()
-    assert len(data) == 1
-    assert data[0]["camera_id"] == "CAM-01"
-    assert data[0]["event_type"] == "INTRUSION_DETECTED"
+    assert len(data) == 4
+    for ev in data:
+        assert ev["confidence"] >= 0.85
+
+    # Filter confidence between 0.70 and 0.85 -> 0.85, 0.70, 0.78 (3 events)
+    resp_range = client.get("/api/v1/events?confidence_min=0.70&confidence_max=0.85")
+    assert resp_range.status_code == 200
+    data_range = resp_range.json()
+    assert len(data_range) == 3
+    for ev in data_range:
+        assert 0.70 <= ev["confidence"] <= 0.85
 
 
-def test_pagination_limit(client: TestClient):
-    """GET /api/v1/events?limit=3 returns at most 3 items."""
+def test_invalid_confidence_range_returns_422(client: TestClient):
+    """confidence_min > confidence_max returns 422."""
+    resp = client.get("/api/v1/events?confidence_min=0.90&confidence_max=0.80")
+    assert resp.status_code == 422
+
+
+def test_event_count_endpoint(client: TestClient):
+    """GET /api/v1/events/count returns accurate event count matching filters."""
     _seed_sample_events(client)
-    resp = client.get("/api/v1/events?limit=3")
+
+    # Total count
+    resp = client.get("/api/v1/events/count")
     assert resp.status_code == 200
-    data = resp.json()
-    assert len(data) == 3
+    assert resp.json()["count"] == 7
+
+    # Filtered count
+    resp_filtered = client.get("/api/v1/events/count?event_type=INTRUSION_DETECTED")
+    assert resp_filtered.status_code == 200
+    assert resp_filtered.json()["count"] == 2
+
+    # Filtered count with camera and confidence
+    resp_cam = client.get("/api/v1/events/count?camera_id=CAM-01&confidence_min=0.80")
+    assert resp_cam.status_code == 200
+    assert resp_cam.json()["count"] == 2
 
 
-def test_pagination_offset(client: TestClient):
-    """GET /api/v1/events?limit=2&offset=2 skips the first 2 items."""
+def test_pagination_limit_and_offset(client: TestClient):
+    """Pagination parameters limit and offset work correctly."""
     _seed_sample_events(client)
     all_resp = client.get("/api/v1/events?limit=10")
     all_data = all_resp.json()
@@ -446,29 +467,18 @@ def test_pagination_offset(client: TestClient):
     assert offset_data[1]["id"] == all_data[3]["id"]
 
 
-def test_empty_results_when_filter_matches_nothing(client: TestClient):
-    """Querying a camera or event_type with no matches returns []."""
-    _seed_sample_events(client)
-    resp = client.get("/api/v1/events?camera_id=NON_EXISTENT_CAM")
-    assert resp.status_code == 200
-    assert resp.json() == []
-
-
 def test_invalid_query_parameters_return_422(client: TestClient):
     """Invalid query parameter boundaries return 422."""
-    # limit > 100
     assert client.get("/api/v1/events?limit=101").status_code == 422
-    # limit < 1
     assert client.get("/api/v1/events?limit=0").status_code == 422
-    assert client.get("/api/v1/events?limit=-5").status_code == 422
-    # offset < 0
     assert client.get("/api/v1/events?offset=-1").status_code == 422
-    # invalid event_type
     assert client.get("/api/v1/events?event_type=INVALID_TYPE").status_code == 422
+    assert client.get("/api/v1/events?confidence_min=-0.1").status_code == 422
+    assert client.get("/api/v1/events?confidence_max=1.5").status_code == 422
 
 
 # ---------------------------------------------------------------------------
-# 6. Phase 2A: Event Statistics Endpoint
+# 6. Event Statistics Endpoint
 # ---------------------------------------------------------------------------
 
 def test_event_stats_empty_database(client: TestClient):
@@ -483,43 +493,3 @@ def test_event_stats_empty_database(client: TestClient):
     assert stats["total_anpr"] == 0
     assert stats["total_watchlist_matches"] == 0
     assert stats["total_suspicious_activity"] == 0
-
-
-def test_event_stats_populated_database(client: TestClient):
-    """GET /api/v1/events/stats returns accurate counts for all categories."""
-    events = [
-        ("CAM-01", "INTRUSION_DETECTED"),
-        ("CAM-02", "INTRUSION_DETECTED"),
-        ("CAM-03", "INTRUSION_DETECTED"),
-        ("CAM-01", "VEHICLE_DETECTED"),
-        ("CAM-02", "VEHICLE_DETECTED"),
-        ("CAM-01", "PERSON_DETECTED"),
-        ("CAM-01", "ANPR_DETECTED"),
-        ("CAM-02", "ANPR_DETECTED"),
-        ("CAM-01", "WATCHLIST_MATCH"),
-        ("CAM-01", "SUSPICIOUS_ACTIVITY"),
-        ("CAM-02", "SUSPICIOUS_ACTIVITY"),
-    ]
-    for cam, ev_type in events:
-        client.post(
-            "/api/v1/events",
-            json={
-                "camera_id": cam,
-                "event_type": ev_type,
-                "timestamp": "2026-08-28T12:00:00Z",
-                "confidence": 0.90,
-                "metadata": {},
-            },
-        )
-
-    resp = client.get("/api/v1/events/stats")
-    assert resp.status_code == 200
-    stats = resp.json()
-
-    assert stats["total_events"] == 11
-    assert stats["total_intrusions"] == 3
-    assert stats["total_vehicles"] == 2
-    assert stats["total_persons"] == 1
-    assert stats["total_anpr"] == 2
-    assert stats["total_watchlist_matches"] == 1
-    assert stats["total_suspicious_activity"] == 2

@@ -9,7 +9,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import init_db
-from app.routes.events import router as events_router
+from app.routes import (
+    cameras_router,
+    dashboard_router,
+    events_router,
+    health_router,
+)
 
 
 @asynccontextmanager
@@ -27,7 +32,8 @@ app = FastAPI(
     version="1.0.0",
     description=(
         "Intelligent Border Video Analytics Platform (IBVAP) Core Backend API. "
-        "Receives, validates, and persists common events from AI modules (CV, ANPR)."
+        "Receives, validates, and persists common events from AI modules (CV, ANPR), "
+        "manages cameras, and provides real-time surveillance analytics for the dashboard."
     ),
     lifespan=lifespan,
     docs_url="/docs",
@@ -49,6 +55,9 @@ app.add_middleware(
 # Routers
 # ---------------------------------------------------------------------------
 app.include_router(events_router)
+app.include_router(dashboard_router)
+app.include_router(cameras_router)
+app.include_router(health_router)
 
 
 @app.get(

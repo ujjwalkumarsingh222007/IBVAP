@@ -11,12 +11,45 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import Event
-from app.schemas import EventCreate, EventResponse, EventStatsResponse, EventType
+from app.schemas import (
+    EventCountResponse,
+    EventCreate,
+    EventResponse,
+    EventStatsResponse,
+    EventType,
+)
 
 router = APIRouter(
     prefix="/api/v1/events",
     tags=["Events"],
 )
+
+
+def _apply_event_filters(
+    query,
+    event_type: Optional[EventType] = None,
+    camera_id: Optional[str] = None,
+    confidence_min: Optional[float] = None,
+    confidence_max: Optional[float] = None,
+):
+    """Helper to apply common filtering to an Event query."""
+    if confidence_min is not None and confidence_max is not None:
+        if confidence_min > confidence_max:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="confidence_min cannot be greater than confidence_max",
+            )
+
+    if event_type is not None:
+        query = query.filter(Event.event_type == event_type.value)
+    if camera_id is not None:
+        query = query.filter(Event.camera_id == camera_id)
+    if confidence_min is not None:
+        query = query.filter(Event.confidence >= confidence_min)
+    if confidence_max is not None:
+        query = query.filter(Event.confidence <= confidence_max)
+
+    return query
 
 
 @router.post(
@@ -66,7 +99,7 @@ def create_event(
     summary="List and filter persisted surveillance events",
     description=(
         "Retrieve a paginated list of surveillance events ordered newest first (created_at DESC, id DESC). "
-        "Supports filtering by event_type and camera_id."
+        "Supports filtering by event_type, camera_id, and confidence range."
     ),
 )
 def list_events(
@@ -77,6 +110,18 @@ def list_events(
     camera_id: Optional[str] = Query(
         default=None,
         description="Filter events by camera identifier (e.g. CAM-01).",
+    ),
+    confidence_min: Optional[float] = Query(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Filter events with confidence score greater than or equal to this value.",
+    ),
+    confidence_max: Optional[float] = Query(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Filter events with confidence score less than or equal to this value.",
     ),
     limit: int = Query(
         default=50,
@@ -94,12 +139,13 @@ def list_events(
     """
     List events from the database with optional filtering and pagination.
     """
-    query = db.query(Event)
-
-    if event_type is not None:
-        query = query.filter(Event.event_type == event_type.value)
-    if camera_id is not None:
-        query = query.filter(Event.camera_id == camera_id)
+    query = _apply_event_filters(
+        db.query(Event),
+        event_type=event_type,
+        camera_id=camera_id,
+        confidence_min=confidence_min,
+        confidence_max=confidence_max,
+    )
 
     # Order newest first (created_at DESC, then id DESC)
     events = (
@@ -121,6 +167,50 @@ def list_events(
         )
         for ev in events
     ]
+
+
+@router.get(
+    "/count",
+    response_model=EventCountResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Count surveillance events matching filters",
+    description="Returns the total number of surveillance events that match the supplied query filters.",
+)
+def count_events(
+    event_type: Optional[EventType] = Query(
+        default=None,
+        description="Filter count by event category.",
+    ),
+    camera_id: Optional[str] = Query(
+        default=None,
+        description="Filter count by camera identifier.",
+    ),
+    confidence_min: Optional[float] = Query(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Filter count with confidence >= min.",
+    ),
+    confidence_max: Optional[float] = Query(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Filter count with confidence <= max.",
+    ),
+    db: Session = Depends(get_db),
+) -> EventCountResponse:
+    """
+    Count matching events using SQL COUNT without loading rows into Python.
+    """
+    query = _apply_event_filters(
+        db.query(func.count(Event.id)),
+        event_type=event_type,
+        camera_id=camera_id,
+        confidence_min=confidence_min,
+        confidence_max=confidence_max,
+    )
+    total = query.scalar() or 0
+    return EventCountResponse(count=total)
 
 
 @router.get(
