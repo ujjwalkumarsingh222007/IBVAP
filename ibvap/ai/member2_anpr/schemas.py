@@ -84,6 +84,8 @@ class RecognitionResult(BaseModel):
     raw_text: str = Field(..., description="Raw OCR text before normalisation")
     confidence: float = Field(..., ge=0.0, le=1.0)
     normalised: bool = Field(default=True)
+    validation_passed: bool = Field(default=True, description="Whether the plate format passed validation")
+    validation_reason: Optional[str] = Field(default=None, description="Validation description or pattern matched")
 
 
 class WatchlistResult(BaseModel):
@@ -124,7 +126,7 @@ class IBVAPEvent(BaseModel):
 
 class ANPRResult(BaseModel):
     """
-    Aggregated result of a single ANPR pipeline run on one frame.
+    Aggregated result of a single ANPR pipeline run on one plate in a frame.
 
     This is the object returned by ANPRPipeline.process_frame().
     """
@@ -132,6 +134,7 @@ class ANPRResult(BaseModel):
     plate_number: Optional[str] = Field(default=None)
     plate_confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     ocr_confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    vehicle_id: Optional[str] = Field(default=None, description="Associated vehicle tracking ID if provided")
     watchlist_match: bool = Field(default=False)
     watchlist_status: Optional[str] = Field(default=None)
     watchlist_reason: Optional[str] = Field(default=None)

@@ -7,19 +7,41 @@ Exposes the high-level public interface so that downstream consumers
 depend on internal implementation details.
 """
 
+from .config import ANPRConfig, default_config
+from .detector import BasePlateDetector, MockPlateDetector, YOLOPlateDetector
+from .event_generator import ANPREventGenerator
+from .ocr import BaseOCREngine, MockOCREngine, EasyOCREngine
 from .pipeline import ANPRPipeline
+from .preprocessing import PlatePreprocessor
+from .recognizer import PlateRecognizer, normalise_plate, validate_indian_plate
 from .schemas import (
     ANPRResult,
+    EventType,
     IBVAPEvent,
-    PlateRegion,
     OCRResult,
+    PlateRegion,
     RecognitionResult,
     WatchlistResult,
-    EventType,
 )
+from .watchlist import BaseWatchlistMatcher, InMemoryWatchlistMatcher
 
 __all__ = [
     "ANPRPipeline",
+    "ANPRConfig",
+    "default_config",
+    "BasePlateDetector",
+    "MockPlateDetector",
+    "YOLOPlateDetector",
+    "BaseOCREngine",
+    "MockOCREngine",
+    "EasyOCREngine",
+    "PlatePreprocessor",
+    "PlateRecognizer",
+    "normalise_plate",
+    "validate_indian_plate",
+    "BaseWatchlistMatcher",
+    "InMemoryWatchlistMatcher",
+    "ANPREventGenerator",
     "ANPRResult",
     "IBVAPEvent",
     "PlateRegion",
@@ -29,5 +51,5 @@ __all__ = [
     "EventType",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __author__ = "Member 2 - ANPR Developer"

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import List, Optional
 
 
 @dataclass
@@ -27,32 +27,58 @@ class ANPRConfig:
     detector_backend: str = field(
         default_factory=lambda: os.getenv("ANPR_DETECTOR_BACKEND", "mock")
     )
-    """Which plate-detector backend to use.
-    Phase 1 default is 'mock'. Future values: 'yolo', 'east', 'paddleocr'.
-    """
+    """Which plate-detector backend to use ('mock', 'yolo', etc.)."""
 
     detector_model_path: Optional[str] = field(
-        default_factory=lambda: os.getenv("ANPR_DETECTOR_MODEL_PATH", None)
+        default_factory=lambda: os.getenv(
+            "PLATE_MODEL_PATH", os.getenv("ANPR_DETECTOR_MODEL_PATH", "models/license_plate.pt")
+        )
     )
-    """Path to the detector model weights. Not required for the mock backend."""
+    """Path to the detector model weights (e.g. YOLO .pt file)."""
 
     detector_confidence_threshold: float = field(
-        default_factory=lambda: float(os.getenv("ANPR_DETECTOR_CONF", "0.50"))
+        default_factory=lambda: float(
+            os.getenv("PLATE_CONFIDENCE_THRESHOLD", os.getenv("ANPR_DETECTOR_CONF", "0.40"))
+        )
     )
     """Minimum detection confidence; boxes below this are discarded."""
+
+    detector_device: str = field(
+        default_factory=lambda: os.getenv("PLATE_DEVICE", os.getenv("ANPR_DEVICE", "cpu"))
+    )
+    """Inference device: 'cpu' or 'cuda'."""
 
     # --- OCR ---
     ocr_backend: str = field(
         default_factory=lambda: os.getenv("ANPR_OCR_BACKEND", "mock")
     )
-    """Which OCR engine to use.
-    Phase 1 default is 'mock'. Future values: 'easyocr', 'tesseract', 'paddleocr'.
-    """
+    """Which OCR engine to use ('mock', 'easyocr', 'tesseract', etc.)."""
 
     ocr_confidence_threshold: float = field(
         default_factory=lambda: float(os.getenv("ANPR_OCR_CONF", "0.40"))
     )
     """Minimum OCR confidence; results below this are discarded."""
+
+    ocr_languages: List[str] = field(
+        default_factory=lambda: os.getenv("ANPR_OCR_LANGUAGES", "en").split(",")
+    )
+    """Languages for OCR engine (default ['en'])."""
+
+    ocr_gpu: bool = field(
+        default_factory=lambda: os.getenv("ANPR_OCR_GPU", "false").lower() in ("true", "1", "yes")
+    )
+    """Whether to use GPU for OCR."""
+
+    # --- Preprocessing ---
+    preprocess_enabled: bool = field(
+        default_factory=lambda: os.getenv("ANPR_PREPROCESS_ENABLED", "true").lower() in ("true", "1", "yes")
+    )
+    """Whether to apply image enhancement before OCR."""
+
+    preprocess_target_width: int = field(
+        default_factory=lambda: int(os.getenv("ANPR_PREPROCESS_WIDTH", "320"))
+    )
+    """Target width to upscale/normalize plate crops for OCR."""
 
     # --- Recognition / normalisation ---
     plate_country: str = field(
@@ -64,9 +90,7 @@ class ANPRConfig:
     watchlist_backend: str = field(
         default_factory=lambda: os.getenv("ANPR_WATCHLIST_BACKEND", "memory")
     )
-    """Watchlist storage backend.
-    Phase 1 default is 'memory'. Future values: 'postgres', 'redis'.
-    """
+    """Watchlist storage backend ('memory', 'postgres', etc.)."""
 
     # --- General ---
     log_level: str = field(

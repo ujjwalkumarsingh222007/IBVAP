@@ -49,6 +49,7 @@ class ANPREventGenerator:
         watchlist: WatchlistResult,
         plate_confidence: float,
         timestamp: Optional[str] = None,
+        vehicle_id: Optional[str] = None,
     ) -> IBVAPEvent:
         """
         Build an IBVAPEvent from ANPR component results.
@@ -65,6 +66,8 @@ class ANPREventGenerator:
             Confidence from the plate detector (0-1).
         timestamp:
             ISO-8601 string. Auto-generated if None or empty.
+        vehicle_id:
+            Optional vehicle ID from tracking/Member 1.
         """
         if not camera_id or not camera_id.strip():
             raise ValueError("camera_id must be a non-empty string")
@@ -90,9 +93,13 @@ class ANPREventGenerator:
             "raw_ocr_text": recognition.raw_text,
             "plate_confidence": round(plate_confidence, 4),
             "ocr_confidence": round(recognition.confidence, 4),
-            "vehicle_id": None,
+            "vehicle_id": vehicle_id,
             "watchlist_match": watchlist.is_match,
+            "validation_passed": recognition.validation_passed,
         }
+
+        if recognition.validation_reason:
+            metadata["validation_reason"] = recognition.validation_reason
 
         if watchlist.is_match:
             metadata["watchlist_status"] = watchlist.status

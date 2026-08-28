@@ -14,7 +14,14 @@ from ai.member2_anpr.schemas import (
 
 
 def _make_recognition(plate: str = "TN09AB1234", conf: float = 0.91) -> RecognitionResult:
-    return RecognitionResult(plate_number=plate, raw_text=plate, confidence=conf, normalised=True)
+    return RecognitionResult(
+        plate_number=plate,
+        raw_text=plate,
+        confidence=conf,
+        normalised=True,
+        validation_passed=True,
+        validation_reason="Standard Indian Plate (TN)",
+    )
 
 
 def _make_watchlist(plate: str = "TN09AB1234", is_match: bool = False) -> WatchlistResult:
@@ -33,6 +40,7 @@ class TestANPRDetectedEvent:
             watchlist=kwargs.get("watchlist", _make_watchlist()),
             plate_confidence=kwargs.get("plate_confidence", 0.90),
             timestamp=kwargs.get("timestamp", "2026-08-28T15:30:00+05:30"),
+            vehicle_id=kwargs.get("vehicle_id", None),
         )
 
     def test_returns_ibvap_event(self):
@@ -65,8 +73,9 @@ class TestANPRDetectedEvent:
     def test_metadata_watchlist_match_is_false(self):
         assert self._generate().metadata["watchlist_match"] is False
 
-    def test_metadata_vehicle_id_is_none(self):
-        assert self._generate().metadata["vehicle_id"] is None
+    def test_metadata_vehicle_id_preserved(self):
+        event = self._generate(vehicle_id="VEH-001")
+        assert event.metadata["vehicle_id"] == "VEH-001"
 
     def test_empty_camera_id_raises(self):
         gen = ANPREventGenerator()

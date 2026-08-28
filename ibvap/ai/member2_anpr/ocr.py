@@ -7,22 +7,18 @@ Architecture
 ------------
 BaseOCREngine           (abstract interface)
     |-- MockOCREngine      (deterministic stub - Phase 1 / testing)
-    |-- [future] EasyOCREngine
-    |-- [future] TesseractOCREngine
-    |-- [future] PaddleOCREngine
-
-The engine accepts a cropped plate image (NumPy array) and returns
-an OCRResult containing raw text and confidence.
+    |-- EasyOCREngine      (EasyOCR integration with preprocessing - Phase 2)
 """
 
 from __future__ import annotations
 
 import abc
 import logging
-from typing import Optional
+from typing import List, Optional
 
 import numpy as np
 
+from .preprocessing import PlatePreprocessor
 from .schemas import OCRResult
 
 logger = logging.getLogger(__name__)
@@ -82,14 +78,6 @@ _MOCK_DEFAULT_CONFIDENCE = 0.91
 class MockOCREngine(BaseOCREngine):
     """
     Deterministic mock OCR engine that does NOT require any model or GPU.
-
-    Behaviour
-    ---------
-    * Returns a fixed plate text and confidence for valid images.
-    * Returns empty text with low confidence for images smaller than 5x5.
-    * Supports injecting a custom return value for targeted unit tests.
-
-    Replace with a real OCR engine by subclassing BaseOCREngine.
     """
 
     def __init__(
@@ -123,3 +111,124 @@ class MockOCREngine(BaseOCREngine):
             confidence=self._mock_confidence,
             engine="mock",
         )
+
+
+# ---------------------------------------------------------------------------
+# EasyOCR Implementation - Phase 2
+# ---------------------------------------------------------------------------
+
+class EasyOCREngine(BaseOCREngine):
+    """
+    EasyOCR reader implementation with integrated PlatePreprocessor.
+
+    Parameters
+    ----------
+    languages:
+        List of language codes to load (e.g. ['en']).
+    gpu:
+        Whether to use GPU acceleration.
+    reader_instance:
+        Optional pre-created easyocr.Reader instance (for dependency injection/testing).
+    preprocessor:
+        Optional custom PlatePreprocessor.
+    """
+
+    def __init__(
+        self,
+        languages: Optional[List[str]] = None,
+        gpu: bool = False,
+        reader_instance: Optional[object] = None,
+        preprocessor: Optional[PlatePreprocessor] = None,
+    ) -> None:
+        self.languages = languages or ["en"]
+        self.gpu = gpu
+        self.preprocessor = preprocessor or PlatePreprocessor()
+
+        if reader_instance is not None:
+            self._reader = reader_instance
+            logger.info("EasyOCREngine initialized with injected Reader instance")
+        else:
+            try:
+                import easyocr  # lazy import
+                self._reader = easyocr.Reader(self.languages, gpu=self.gpu)
+                logger.info(
+                    "EasyOCREngine initialized successfully (languages=%s, gpu=%s)",
+                    self.languages,
+                    self.gpu,
+                )
+            except ImportError as err:
+                raise ImportError(
+                    "The 'easyocr' package is required for EasyOCREngine. "
+                    "Install it via 'pip install easyocr'."
+                ) from err
+
+    def read(self, plate_image: np.ndarray) -> OCRResult:
+        """
+        Run OCR on cropped plate image, testing both raw and preprocessed variants.
+        """
+        self._validate_image(plate_image)
+
+        h, w = plate_image.shape[:2]
+        if h < 5 or w < 5:
+            return OCRResult(raw_text="", confidence=0.0, engine="easyocr")
+
+        # 1. Run OCR on original crop
+        raw_res = self._run_easyocr(plate_image)
+
+        # 2. Run OCR on preprocessed variants
+        try:
+            enhanced_gray, binary = self.preprocessor.get_variants(plate_image)
+            gray_res = self._run_easyocr(enhanced_gray)
+            bin_res = self._run_easyocr(binary)
+        except Exception as exc:
+            logger.debug("Preprocessing before OCR skipped/failed: %s", exc)
+            gray_res = ( "", 0.0 )
+            bin_res = ( "", 0.0 )
+
+        # Select candidate with the best confidence and non-empty text
+        candidates = [raw_res, gray_res, bin_res]
+        # Prefer candidates that produced non-empty text with highest confidence
+        valid_candidates = [c for c in candidates if c[0].strip()]
+        if valid_candidates:
+            best_text, best_conf = max(valid_candidates, key=lambda item: item[1])
+        else:
+            best_text, best_conf = "", 0.0
+
+        return OCRResult(
+            raw_text=best_text,
+            confidence=round(best_conf, 4),
+            engine="easyocr",
+        )
+
+    def _run_easyocr(self, img: np.ndarray) -> tuple[str, float]:
+        """Internal helper to execute reader on an image array."""
+        try:
+            results = self._reader.readtext(
+                img,
+                detail=1,
+                paragraph=False,
+            )
+        except Exception as exc:
+            logger.warning("EasyOCR read error: %s", exc)
+            return "", 0.0
+
+        if not results:
+            return "", 0.0
+
+        # results format: [ (bbox, text, conf), ... ]
+        text_parts = []
+        conf_parts = []
+
+        for item in results:
+            if len(item) >= 3:
+                _, text, conf = item[:3]
+                if text and str(text).strip():
+                    text_parts.append(str(text).strip())
+                    conf_parts.append(float(conf))
+
+        if not text_parts:
+            return "", 0.0
+
+        combined_text = " ".join(text_parts)
+        avg_conf = sum(conf_parts) / len(conf_parts) if conf_parts else 0.0
+        return combined_text, avg_conf

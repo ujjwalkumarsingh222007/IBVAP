@@ -1,285 +1,249 @@
-# Member 2 — ANPR Module
+# Member 2 â€” ANPR Module
 
-**IBVAP (Intelligent Border Video Analytics Platform)**
-Module: `ai/member2_anpr/`
-Phase: 1 — Foundation
-
----
-
-## Overview
-
-The ANPR (Automatic Number Plate Recognition) module converts raw video frames into structured, standardised IBVAP events containing detected plate numbers and watchlist match status.
-
-It is designed as a self-contained, independently testable subsystem within the larger IBVAP platform.
+**IBVAP (Intelligent Border Video Analytics Platform)**  
+Module: `ai/member2_anpr/`  
+Phase: 2 â€” Real ANPR Implementation  
 
 ---
 
-## Responsibilities
+## 1. Overview
+
+The **ANPR (Automatic Number Plate Recognition)** subsystem processes video frames and cropped vehicle regions to detect license plates, enhance plate images, perform OCR, normalize and validate Indian registration numbers, match against active watchlists, and generate standardized `IBVAPEvent` payloads for Member 3's backend.
+
+Phase 2 introduces real model integrations (`YOLOPlateDetector`, `EasyOCREngine`), an image preprocessing pipeline (`PlatePreprocessor`), position-aware Indian plate normalisation, and Indian vehicle registration format validation.
+
+---
+
+## 2. Responsibilities
 
 Member 2 exclusively owns all code under `ai/member2_anpr/`.
 
-| Responsibility | Module |
-|---|---|
-| Number plate detection (bounding box) | `detector.py` |
-| OCR — reading plate text | `ocr.py` |
-| Text normalisation & recognition | `recognizer.py` |
-| Watchlist matching | `watchlist.py` |
-| Standardised event generation | `event_generator.py` |
-| End-to-end pipeline orchestration | `pipeline.py` |
-| Data contracts / schemas | `schemas.py` |
-| Configuration | `config.py` |
-
-Member 2 does **not** implement:
-
-- Vehicle detection / tracking (Member 1 — CV)
-- FastAPI routes or REST endpoints (Member 3 — Backend)
-- PostgreSQL models (Member 3 — Backend)
-- React components (Member 4 — Frontend)
-- RTSP stream management
+| Responsibility | Module | Class / Helper |
+|---|---|---|
+| License plate detection | `detector.py` | `BasePlateDetector`, `MockPlateDetector`, `YOLOPlateDetector` |
+| Image preprocessing | `preprocessing.py` | `PlatePreprocessor` (resize, CLAHE, bilateral filter, binarization) |
+| Optical Character Recognition (OCR) | `ocr.py` | `BaseOCREngine`, `MockOCREngine`, `EasyOCREngine` |
+| Plate normalisation & validation | `recognizer.py` | `PlateRecognizer`, `normalise_plate()`, `validate_indian_plate()` |
+| In-memory watchlist matching | `watchlist.py` | `BaseWatchlistMatcher`, `InMemoryWatchlistMatcher` |
+| Standardised event generation | `event_generator.py` | `ANPREventGenerator` |
+| End-to-end orchestration | `pipeline.py` | `ANPRPipeline` |
+| Data contracts / schemas | `schemas.py` | `PlateRegion`, `OCRResult`, `RecognitionResult`, `IBVAPEvent`, `ANPRResult` |
+| Configuration | `config.py` | `ANPRConfig`, `default_config` |
+| CLI / Demo Entrypoint | `main.py` | Command line runner |
 
 ---
 
-## Architecture
+## 3. Architecture
 
+```text
+Input Frame (NumPy BGR array)
+      â”‚
+      â–¼
+YOLOPlateDetector / BasePlateDetector
+      â”‚   â†’ List[PlateRegion] (x1, y1, x2, y2, confidence)
+      â”‚
+      â–¼   (crop plate bounding box)
+PlatePreprocessor
+      â”‚   â†’ Enhanced Grayscale / Binarized variants
+      â”‚
+      â–¼
+EasyOCREngine / BaseOCREngine
+      â”‚   â†’ OCRResult (raw_text, confidence, engine)
+      â”‚
+      â–¼
+PlateRecognizer (normalise_plate + validate_indian_plate)
+      â”‚   â†’ RecognitionResult (plate_number, validation_passed, confidence)
+      â”‚
+      â–¼
+InMemoryWatchlistMatcher / BaseWatchlistMatcher
+      â”‚   â†’ WatchlistResult (is_match, status, reason)
+      â”‚
+      â–¼
+ANPREventGenerator
+      â”‚   â†’ IBVAPEvent (camera_id, event_type, confidence, metadata)
+      â”‚
+      â–¼
+List[ANPRResult]
 ```
-Input frame  (NumPy BGR array)
-      ¦
-      ?
-BasePlateDetector.detect(frame)
-      ¦   ? List[PlateRegion]  (x1, y1, x2, y2, confidence)
-      ¦
-      ?   (crop each region)
-BaseOCREngine.read(plate_image)
-      ¦   ? OCRResult  (raw_text, confidence, engine)
-      ¦
-      ?
-PlateRecognizer.recognise(ocr_result)
-      ¦   ? RecognitionResult  (plate_number, confidence, normalised)
-      ¦
-      ?
-BaseWatchlistMatcher.match(plate_number)
-      ¦   ? WatchlistResult  (is_match, status, reason)
-      ¦
-      ?
-ANPREventGenerator.generate(...)
-      ¦   ? IBVAPEvent  (camera_id, event_type, timestamp, confidence, metadata)
-      ¦
-      ?
-ANPRResult  (plate_number, confidences, watchlist info, event)
-```
-
-### Phase 1 Implementations
-
-| Abstract | Phase 1 Stub |
-|---|---|
-| `BasePlateDetector` | `MockPlateDetector` |
-| `BaseOCREngine` | `MockOCREngine` |
-| `BaseWatchlistMatcher` | `InMemoryWatchlistMatcher` |
-
-Swap in a real implementation (e.g. `YOLOPlateDetector`, `EasyOCREngine`) by subclassing the base class and injecting it into `ANPRPipeline`.
 
 ---
 
-## Installation
+## 4. Installation
 
 ```bash
-# From repository root
-cd ai/member2_anpr
+# Navigate to repository root
+cd ibvap/ai/member2_anpr
+
+# Install dependencies
 pip install -r requirements.txt
 ```
 
-Python 3.10+ is required.
+---
+
+## 5. Model Setup & Weights
+
+### License Plate Detection (YOLO)
+Place your trained YOLO license plate detection weights (`.pt` file) in a directory such as `ai/member2_anpr/models/`:
+
+```text
+ai/member2_anpr/
+â””â”€â”€ models/
+    â””â”€â”€ license_plate.pt
+```
+
+Set the model path via environment variable or pass it to `YOLOPlateDetector`:
+```bash
+export PLATE_MODEL_PATH="models/license_plate.pt"
+export PLATE_DEVICE="cpu" # or "cuda"
+```
+
+> **Note:** Model weights are not committed to Git. If the model file is not present, `YOLOPlateDetector` raises an informative `FileNotFoundError`. The automated unit test suite uses mocks and does not require weights.
+
+### OCR (EasyOCR)
+EasyOCR automatically downloads lightweight character recognition models to `~/.EasyOCR/` upon first invocation. To disable GPU on CPU-only machines:
+```bash
+export ANPR_OCR_GPU="false"
+```
 
 ---
 
-## Usage
+## 6. Usage & CLI
 
-### Minimal example
+### CLI Demo Runner
+
+```bash
+# Run simulation using mock components (no weights required)
+python -m ai.member2_anpr.main --mock
+
+# Run on a local vehicle image with mock pipeline
+python -m ai.member2_anpr.main --mock --image test_vehicle.jpg --camera CAM-01 --vehicle-id VEH-101
+
+# Run with real YOLO + EasyOCR pipeline on a local image
+python -m ai.member2_anpr.main --image test_vehicle.jpg --model-path models/license_plate.pt
+```
+
+### Python API Example
 
 ```python
-import numpy as np
-from ai.member2_anpr import ANPRPipeline
+import cv2
+from ai.member2_anpr import (
+    ANPRPipeline,
+    YOLOPlateDetector,
+    EasyOCREngine,
+    PlateRecognizer,
+    InMemoryWatchlistMatcher,
+    ANPREventGenerator,
+)
 
-# Build a synthetic frame (replace with a real OpenCV frame)
-frame = np.zeros((480, 640, 3), dtype=np.uint8)
+# Initialize components once
+detector = YOLOPlateDetector(model_path="models/license_plate.pt", device="cpu")
+ocr = EasyOCREngine(languages=["en"], gpu=False)
+recognizer = PlateRecognizer()
+watchlist = InMemoryWatchlistMatcher()
+event_gen = ANPREventGenerator()
 
-pipeline = ANPRPipeline()          # uses mock components by default
-results  = pipeline.process_frame(
-    frame,
-    camera_id="CAM-01",
-    timestamp="2026-08-28T15:30:00+05:30",
+# Build pipeline via dependency injection
+pipeline = ANPRPipeline(
+    detector=detector,
+    ocr_engine=ocr,
+    recognizer=recognizer,
+    watchlist=watchlist,
+    event_generator=event_gen,
+)
+
+# Process a frame
+frame = cv2.imread("traffic_snapshot.jpg")
+results = pipeline.process_frame(
+    frame=frame,
+    camera_id="CAM-BORDER-01",
+    vehicle_id="VEH-4092",
 )
 
 for result in results:
     if result.success:
-        print(result.plate_number)          # e.g. TN09AB1234
-        print(result.watchlist_match)       # True / False
-        print(result.event.model_dump())    # full IBVAPEvent dict
+        print(f"Plate: {result.plate_number}")
+        print(f"Plate Conf: {result.plate_confidence}, OCR Conf: {result.ocr_confidence}")
+        print(f"Watchlist Hit: {result.watchlist_match}")
+        print(f"Event: {result.event.model_dump()}")
 ```
 
-### Running the demo
+---
+
+## 7. Configuration Reference
+
+Environment variables supported by `config.py`:
+
+| Environment Variable | Default | Description |
+|---|---|---|
+| `PLATE_MODEL_PATH` | `models/license_plate.pt` | Path to YOLO detector model weights |
+| `PLATE_CONFIDENCE_THRESHOLD` | `0.40` | Detection score threshold for plate bounding boxes |
+| `PLATE_DEVICE` | `cpu` | Device for detector inference (`cpu` / `cuda`) |
+| `ANPR_OCR_BACKEND` | `mock` | Default OCR engine (`mock` / `easyocr`) |
+| `ANPR_OCR_CONF` | `0.40` | Minimum acceptable OCR confidence |
+| `ANPR_OCR_LANGUAGES` | `en` | Comma-separated OCR languages (e.g. `en`) |
+| `ANPR_OCR_GPU` | `false` | Enable/disable GPU for EasyOCR |
+| `ANPR_PREPROCESS_ENABLED` | `true` | Enable bilateral filtering, CLAHE, and thresholding |
+| `ANPR_PREPROCESS_WIDTH` | `320` | Standard target width for cropped plate images |
+| `ANPR_DEFAULT_CAMERA_ID` | `CAM-01` | Default camera ID identifier |
+| `ANPR_LOG_LEVEL` | `INFO` | Python logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
+
+---
+
+## 8. Indian Registration Number Validation
+
+The `recognizer.py` module includes position-aware character confusion correction (e.g., correcting digit `0` to letter `O` in state prefix positions, or `O` to `0` in numeric positions) and validates formats:
+- **Standard State Registration:** `XX 00 XX 0000` / `XX 00 X 0000` (e.g., `TN09AB1234`, `MH12DE1433`)
+- **Bharat Series (BH):** `YY BH 0000 XX` (e.g., `22BH1234AA`)
+- **Legacy / Short Formats:** `XX 00 0000` (e.g., `DL3C1234`)
+
+---
+
+## 9. Testing
+
+The entire test suite executes in ~0.2s on CPU without requiring GPU or downloaded model weights:
 
 ```bash
-# From repository root
-python -m ai.member2_anpr.main
+# Run all tests
+python -m pytest ai/member2_anpr/tests/ -v
+
+# Run with coverage report
+python -m pytest ai/member2_anpr/tests/ -v --cov=ai.member2_anpr --cov-report=term-missing
 ```
+
+Test modules:
+- `test_detector.py`: Base detector & mock detector contract tests
+- `test_yolo_detector.py`: YOLO detector tests with mocked Ultralytics inference
+- `test_preprocessing.py`: Plate preprocessor tests (rescaling, CLAHE, binarization, edge cases)
+- `test_ocr.py`: Base OCR engine & mock OCR tests
+- `test_easyocr_engine.py`: EasyOCR tests with mocked reader instances
+- `test_recognizer.py`: Normalisation, confusion map correction, and Indian registration validation
+- `test_watchlist.py`: Watchlist matching, case insensitivity, and dynamic additions
+- `test_event_generator.py`: `ANPR_DETECTED` / `WATCHLIST_MATCH` event construction & `vehicle_id` support
+- `test_pipeline.py`: End-to-end pipeline orchestration, multi-plate processing, error isolation
 
 ---
 
-## Input
+## 10. Future Integration
 
-| Parameter | Type | Description |
-|---|---|---|
-| `frame` | `np.ndarray` | OpenCV BGR image (H × W × 3, uint8) |
-| `camera_id` | `str` | Camera identifier e.g. `"CAM-BORDER-01"` |
-| `timestamp` | `str \| None` | ISO-8601 string. Auto-generated (UTC) if omitted. |
-
----
-
-## Output
-
-`process_frame()` returns `List[ANPRResult]`.
-
-### ANPRResult example
-
-```json
-{
-  "plate_number": "TN09AB1234",
-  "plate_confidence": 0.90,
-  "ocr_confidence": 0.91,
-  "watchlist_match": false,
-  "watchlist_status": null,
-  "watchlist_reason": null,
-  "event": {
-    "camera_id": "CAM-01",
-    "event_type": "ANPR_DETECTED",
-    "timestamp": "2026-08-28T15:30:00+05:30",
-    "confidence": 0.9047,
-    "metadata": {
-      "plate_number": "TN09AB1234",
-      "raw_ocr_text": "TN 09 AB 1234",
-      "plate_confidence": 0.9,
-      "ocr_confidence": 0.91,
-      "vehicle_id": null,
-      "watchlist_match": false
-    }
-  },
-  "error": null
-}
-```
-
-### Watchlist match event example
+Member 2 produces standardized `IBVAPEvent` payloads that Member 3 (Backend) will ingest via its REST API:
 
 ```json
 {
   "camera_id": "CAM-01",
-  "event_type": "WATCHLIST_MATCH",
-  "timestamp": "2026-08-28T15:30:00+05:30",
-  "confidence": 0.9047,
+  "event_type": "ANPR_DETECTED",
+  "timestamp": "2026-08-28T15:30:00+00:00",
+  "confidence": 0.92,
   "metadata": {
     "plate_number": "TN09AB1234",
-    "plate_confidence": 0.9,
+    "raw_ocr_text": "TN 09 AB 1234",
+    "plate_confidence": 0.94,
     "ocr_confidence": 0.91,
-    "vehicle_id": null,
-    "watchlist_match": true,
-    "watchlist_status": "WATCHLIST",
-    "watchlist_reason": "Sample watchlist entry for testing"
+    "vehicle_id": "VEH-101",
+    "watchlist_match": false,
+    "validation_passed": true,
+    "validation_reason": "Standard Indian Plate (TN)"
   }
 }
 ```
 
----
-
-## Testing
-
-All tests run with mock/stub components — no GPU, no camera, no database required.
-
-```bash
-# From repository root
-pytest ai/member2_anpr/tests/ -v
-```
-
-With coverage:
-
-```bash
-pytest ai/member2_anpr/tests/ -v --cov=ai.member2_anpr --cov-report=term-missing
-```
-
-### Test coverage
-
-| Test file | Covers |
-|---|---|
-| `test_detector.py` | PlateDetector interface, frame validation, PlateRegion schema |
-| `test_ocr.py` | OCREngine interface, image validation, OCRResult schema |
-| `test_recognizer.py` | Text normalisation, PlateRecognizer, confidence thresholds |
-| `test_watchlist.py` | Watchlist match/non-match, case handling, dynamic entries |
-| `test_event_generator.py` | ANPR_DETECTED, WATCHLIST_MATCH, IBVAPEvent schema |
-| `test_pipeline.py` | End-to-end: valid frame, invalid frame, OCR failure, watchlist |
-
----
-
-## Configuration
-
-Environment variables (all optional):
-
-| Variable | Default | Description |
-|---|---|---|
-| `ANPR_DETECTOR_BACKEND` | `mock` | Detector backend (`mock`, `yolo`) |
-| `ANPR_DETECTOR_MODEL_PATH` | _(none)_ | Path to detector weights |
-| `ANPR_DETECTOR_CONF` | `0.50` | Detection confidence threshold |
-| `ANPR_OCR_BACKEND` | `mock` | OCR engine (`mock`, `easyocr`, `tesseract`) |
-| `ANPR_OCR_CONF` | `0.40` | OCR confidence threshold |
-| `ANPR_PLATE_COUNTRY` | `IN` | Country for normalisation rules |
-| `ANPR_LOG_LEVEL` | `INFO` | Python log level |
-
----
-
-## Future Integration
-
-In later phases, Member 2 will communicate with Member 3 (Backend) via the standardised `IBVAPEvent` object.
-
-```
-ANPRPipeline.process_frame(frame)
-         ¦
-         ?
-    List[ANPRResult]
-         ¦
-         ?  (extract result.event)
-    IBVAPEvent   --?   Member 3 Backend Event Ingestion API
-                              ¦
-                              ?
-                         PostgreSQL
-```
-
-**The backend should import only `IBVAPEvent` from `ai.member2_anpr`.** It must never depend on internal classes such as `PlateDetector`, `OCREngine`, or `WatchlistMatcher`.
-
-This decoupling allows Member 2 to upgrade OCR engines or detection models without requiring any changes to the backend.
-
----
-
-## File Structure
-
-```
-ai/member2_anpr/
-+-- __init__.py          ? Public API surface
-+-- config.py            ? Runtime configuration
-+-- schemas.py           ? All Pydantic data contracts
-+-- detector.py          ? Plate detector abstraction + mock
-+-- ocr.py               ? OCR engine abstraction + mock
-+-- recognizer.py        ? Normalisation + PlateRecognizer
-+-- watchlist.py         ? Watchlist matcher abstraction + in-memory
-+-- event_generator.py   ? IBVAPEvent builder
-+-- pipeline.py          ? End-to-end orchestration
-+-- main.py              ? Demo entry point
-+-- requirements.txt
-+-- README.md
-+-- tests/
-    +-- __init__.py
-    +-- conftest.py          ? Shared pytest fixtures
-    +-- test_detector.py
-    +-- test_ocr.py
-    +-- test_recognizer.py
-    +-- test_watchlist.py
-    +-- test_event_generator.py
-    +-- test_pipeline.py
-```
+The backend needs only to consume `IBVAPEvent` without any coupling to detector, OCR, or preprocessing internals.

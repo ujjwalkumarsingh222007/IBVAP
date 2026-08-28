@@ -1,7 +1,7 @@
-# Member 2 — ANPR Module — Phase 1 Dependencies
+# Member 2 - ANPR Module - Phase 2 Dependencies
 # Python 3.10+
 
-# Core computer vision
+# Core computer vision & numerical processing
 opencv-python>=4.8.0
 numpy>=1.24.0
 
@@ -10,6 +10,10 @@ pydantic>=2.0.0
 
 # Date/time handling
 python-dateutil>=2.8.2
+
+# Phase 2 Real Models (Lazy-loaded, optional for unit testing)
+ultralytics>=8.0.0
+easyocr>=1.7.0
 
 # Testing
 pytest>=7.4.0

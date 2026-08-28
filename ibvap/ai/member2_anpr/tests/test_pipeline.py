@@ -5,12 +5,12 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from ai.member2_anpr.detector import MockPlateDetector
+from ai.member2_anpr.detector import BasePlateDetector, MockPlateDetector
 from ai.member2_anpr.event_generator import ANPREventGenerator
 from ai.member2_anpr.ocr import MockOCREngine
 from ai.member2_anpr.pipeline import ANPRPipeline
 from ai.member2_anpr.recognizer import PlateRecognizer
-from ai.member2_anpr.schemas import ANPRResult, EventType
+from ai.member2_anpr.schemas import ANPRResult, EventType, PlateRegion
 from ai.member2_anpr.watchlist import InMemoryWatchlistMatcher
 
 
@@ -24,7 +24,7 @@ def _pipeline(
         detector=MockPlateDetector(confidence=det_conf),
         ocr_engine=MockOCREngine(mock_text=ocr_text, mock_confidence=ocr_conf),
         recognizer=PlateRecognizer(),
-        watchlist=InMemoryWatchlistMatcher(watchlist=watchlist_store or {}),
+        watchlist=InMemoryWatchlistMatcher(watchlist=watchlist_store if watchlist_store is not None else {}),
         event_generator=ANPREventGenerator(),
     )
 
@@ -70,6 +70,33 @@ class TestPipelineHappyPath:
         ts = "2026-08-28T15:30:00+05:30"
         results = _pipeline().process_frame(valid_frame, timestamp=ts)
         assert results[0].event.timestamp == ts
+
+    def test_vehicle_id_propagated(self, valid_frame):
+        results = _pipeline().process_frame(valid_frame, vehicle_id="VEH-TRACK-42")
+        assert results[0].vehicle_id == "VEH-TRACK-42"
+        assert results[0].event.metadata.get("vehicle_id") == "VEH-TRACK-42"
+
+
+class MultiPlateDetector(BasePlateDetector):
+    def detect(self, frame):
+        return [
+            PlateRegion(x1=50, y1=50, x2=200, y2=100, confidence=0.91),
+            PlateRegion(x1=250, y1=200, x2=400, y2=250, confidence=0.89),
+        ]
+
+
+class TestPipelineMultiplePlates:
+
+    def test_multiple_plates_in_single_frame(self, valid_frame):
+        pipeline = ANPRPipeline(
+            detector=MultiPlateDetector(),
+            ocr_engine=MockOCREngine(mock_text="TN09AB1234"),
+        )
+        results = pipeline.process_frame(valid_frame)
+
+        assert len(results) == 2
+        assert results[0].success is True
+        assert results[1].success is True
 
 
 class TestPipelineFrameValidation:

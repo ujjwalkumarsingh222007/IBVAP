@@ -1,30 +1,33 @@
 """
 IBVAP - Member 2 ANPR Module - main.py
 
-Minimal runnable entry point for the ANPR module.
+Command-line entry point and demo runner for the ANPR module.
 
-Run with:
-    python -m ai.member2_anpr.main
-or:
-    python ai/member2_anpr/main.py
+Usage:
+    # Run mock demo
+    python -m ai.member2_anpr.main --mock
 
-Demonstrates the pipeline using mock components and a synthetic test
-frame -- no camera, model, or GPU required.
+    # Run on a local image using real or mock pipeline
+    python -m ai.member2_anpr.main --image path/to/vehicle.jpg --camera CAM-01
 """
 
 from __future__ import annotations
 
+import argparse
 import logging
+import os
 import sys
 
+import cv2
 import numpy as np
 
+from .config import default_config
+from .detector import MockPlateDetector, YOLOPlateDetector
+from .event_generator import ANPREventGenerator
+from .ocr import EasyOCREngine, MockOCREngine
 from .pipeline import ANPRPipeline
-from .detector import MockPlateDetector
-from .ocr import MockOCREngine
 from .recognizer import PlateRecognizer
 from .watchlist import InMemoryWatchlistMatcher
-from .event_generator import ANPREventGenerator
 
 logging.basicConfig(
     level=logging.INFO,
@@ -35,60 +38,90 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def run_demo() -> None:
-    """Run a quick end-to-end demo using mock components."""
-    logger.info("=" * 60)
-    logger.info("IBVAP - Member 2 ANPR Module - Phase 1 Demo")
-    logger.info("=" * 60)
+def build_pipeline(use_mock: bool, model_path: str | None = None) -> ANPRPipeline:
+    """Instantiate pipeline with real or mock components."""
+    if use_mock:
+        logger.info("Using Mock ANPR components")
+        detector = MockPlateDetector()
+        ocr = MockOCREngine()
+    else:
+        actual_model_path = model_path or default_config.detector_model_path
+        if not os.path.exists(actual_model_path):
+            raise FileNotFoundError(
+                f"Cannot initialize real YOLO detector: weights not found at '{actual_model_path}'.\n"
+                f"Please place your YOLO license plate model (.pt) at this path or specify --mock to run in simulation mode."
+            )
 
-    frame = np.full((480, 640, 3), fill_value=128, dtype=np.uint8)
-    logger.info("Synthetic frame: shape=%s  dtype=%s", frame.shape, frame.dtype)
+        logger.info("Initializing real YOLOPlateDetector and EasyOCREngine...")
+        detector = YOLOPlateDetector(model_path=actual_model_path)
+        ocr = EasyOCREngine(languages=default_config.ocr_languages, gpu=default_config.ocr_gpu)
 
-    pipeline = ANPRPipeline(
-        detector=MockPlateDetector(confidence=0.90),
-        ocr_engine=MockOCREngine(mock_text="TN 09 AB 1234", mock_confidence=0.91),
+    return ANPRPipeline(
+        detector=detector,
+        ocr_engine=ocr,
         recognizer=PlateRecognizer(),
         watchlist=InMemoryWatchlistMatcher(),
         event_generator=ANPREventGenerator(),
     )
 
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="IBVAP Member 2 ANPR Module Runner")
+    parser.add_argument("--image", type=str, help="Path to input image file (optional)")
+    parser.add_argument("--camera", type=str, default="CAM-01", help="Camera ID (default: CAM-01)")
+    parser.add_argument("--vehicle-id", type=str, default=None, help="Associated vehicle ID")
+    parser.add_argument("--mock", action="store_true", help="Force mock components")
+    parser.add_argument("--model-path", type=str, default=None, help="Path to YOLO license plate model (.pt)")
+
+    args = parser.parse_args()
+
+    # Load image or generate synthetic frame
+    if args.image:
+        if not os.path.exists(args.image):
+            logger.error("Image file not found: %s", args.image)
+            sys.exit(1)
+        frame = cv2.imread(args.image)
+        if frame is None:
+            logger.error("Failed to decode image: %s", args.image)
+            sys.exit(1)
+        logger.info("Loaded image '%s' (shape: %s)", args.image, frame.shape)
+    else:
+        logger.info("No --image specified; generating synthetic frame for demo.")
+        frame = np.full((480, 640, 3), fill_value=128, dtype=np.uint8)
+        # If no image specified and mock not explicitly set, default to mock
+        args.mock = True
+
+    try:
+        pipeline = build_pipeline(use_mock=args.mock, model_path=args.model_path)
+    except Exception as err:
+        logger.error("Pipeline initialization failed: %s", err)
+        sys.exit(1)
+
+    logger.info("Processing frame...")
     results = pipeline.process_frame(
         frame=frame,
-        camera_id="CAM-01",
-        timestamp="2026-08-28T15:30:00+05:30",
+        camera_id=args.camera,
+        vehicle_id=args.vehicle_id,
     )
 
     logger.info("Pipeline returned %d result(s)", len(results))
-
-    for i, result in enumerate(results, start=1):
-        logger.info("-" * 40)
-        logger.info("Result %d:", i)
-        if result.error:
-            logger.error("  Error: %s", result.error)
+    for i, res in enumerate(results, 1):
+        print("=" * 60)
+        print(f"Result {i}:")
+        if res.error:
+            print(f"  [ERROR] {res.error}")
         else:
-            logger.info("  Plate number     : %s", result.plate_number)
-            logger.info("  Plate confidence : %.2f", result.plate_confidence)
-            logger.info("  OCR confidence   : %.2f", result.ocr_confidence)
-            logger.info("  Watchlist match  : %s", result.watchlist_match)
-            if result.event:
-                logger.info("  Event type       : %s", result.event.event_type)
-                logger.info("  Event timestamp  : %s", result.event.timestamp)
-                logger.info("  Event metadata   : %s", result.event.metadata)
-
-    logger.info("=" * 60)
-    logger.info("Demo: watchlist match with plate TN09AB1234")
-    logger.info("=" * 60)
-
-    wl_pipeline = ANPRPipeline(
-        ocr_engine=MockOCREngine(mock_text="TN09AB1234", mock_confidence=0.95),
-    )
-    wl_results = wl_pipeline.process_frame(frame=frame, camera_id="CAM-02")
-
-    for result in wl_results:
-        if result.event:
-            logger.info("  Event type: %s", result.event.event_type)
-            logger.info("  Metadata  : %s", result.event.metadata)
+            print(f"  Plate Number    : {res.plate_number}")
+            print(f"  Plate Conf      : {res.plate_confidence}")
+            print(f"  OCR Conf        : {res.ocr_confidence}")
+            print(f"  Vehicle ID      : {res.vehicle_id}")
+            print(f"  Watchlist Match : {res.watchlist_match}")
+            if res.watchlist_status:
+                print(f"  Watchlist Status: {res.watchlist_status}")
+            if res.event:
+                print(f"  Event Type      : {res.event.event_type.value}")
+                print(f"  Event JSON      : {res.event.model_dump_json(indent=2)}")
 
 
 if __name__ == "__main__":
-    run_demo()
+    main()

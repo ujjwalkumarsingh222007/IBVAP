@@ -1,10 +1,14 @@
-"""Tests for the plate recognizer / normalisation module."""
+"""Tests for the plate recognizer / normalisation and validation module."""
 
 from __future__ import annotations
 
 import pytest
 
-from ai.member2_anpr.recognizer import PlateRecognizer, normalise_plate
+from ai.member2_anpr.recognizer import (
+    PlateRecognizer,
+    normalise_plate,
+    validate_indian_plate,
+)
 from ai.member2_anpr.schemas import OCRResult, RecognitionResult
 
 
@@ -43,6 +47,31 @@ class TestNormalisePlate:
         result, _ = normalise_plate("TN$09#AB@1234!")
         assert result == "TN09AB1234"
 
+    def test_bharat_series_normalisation(self):
+        result, _ = normalise_plate("22 BH 1234 AA")
+        assert result == "22BH1234AA"
+
+
+class TestValidateIndianPlate:
+
+    def test_valid_standard_plates(self):
+        assert validate_indian_plate("TN09AB1234")[0] is True
+        assert validate_indian_plate("MH12DE1433")[0] is True
+        assert validate_indian_plate("DL3CAM0001")[0] is True
+        assert validate_indian_plate("KA05MN9999")[0] is True
+
+    def test_valid_bharat_series(self):
+        assert validate_indian_plate("22BH1234AA")[0] is True
+        assert validate_indian_plate("21BH9999Z")[0] is True
+
+    def test_short_format(self):
+        assert validate_indian_plate("DL3C1234")[0] is True
+
+    def test_invalid_plates(self):
+        assert validate_indian_plate("")[0] is False
+        assert validate_indian_plate("A")[0] is False
+        assert validate_indian_plate("1234567890123456")[0] is False
+
 
 class TestPlateRecognizer:
 
@@ -59,6 +88,7 @@ class TestPlateRecognizer:
         result = recognizer.recognise(self._ocr("TN 09 AB 1234"))
         assert result is not None
         assert result.plate_number == "TN09AB1234"
+        assert result.validation_passed is True
 
     def test_recognise_preserves_raw_text(self):
         recognizer = PlateRecognizer()
@@ -92,6 +122,7 @@ class TestPlateRecognizer:
         result = recognizer.recognise(self._ocr("22 BH 1234 AA"))
         assert result is not None
         assert " " not in result.plate_number
+        assert result.validation_passed is True
 
     def test_normalised_flag(self):
         recognizer = PlateRecognizer()
