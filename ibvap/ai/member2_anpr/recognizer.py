@@ -88,7 +88,34 @@ def _apply_confusion_map(text: str) -> str:
     if not remaining:
         return state + dist
 
-    # Partition remaining into letters series and trailing digits
+    # For standard Indian plates, the trailing registration number is typically up to 4 digits.
+    # When remaining length is standard, apply position-specific mapping directly:
+    if len(remaining) == 6:
+        # e.g. AB1234 -> 2 letters series, 4 digits
+        series = "".join(_ALPHA_CORRECTIONS.get(c, c) for c in remaining[:2])
+        number = "".join(_DIGIT_CORRECTIONS.get(c, c) for c in remaining[2:])
+        return state + dist + series + number
+    elif len(remaining) == 5:
+        # e.g. A1234 -> 1 letter series, 4 digits
+        series = "".join(_ALPHA_CORRECTIONS.get(c, c) for c in remaining[:1])
+        number = "".join(_DIGIT_CORRECTIONS.get(c, c) for c in remaining[1:])
+        return state + dist + series + number
+    elif len(remaining) == 7:
+        # e.g. CAM1234 -> 3 letters series, 4 digits
+        series = "".join(_ALPHA_CORRECTIONS.get(c, c) for c in remaining[:3])
+        number = "".join(_DIGIT_CORRECTIONS.get(c, c) for c in remaining[3:])
+        return state + dist + series + number
+    elif len(remaining) == 4:
+        # e.g. 1234 (no series) or A123 (1 letter series + 3 digits)
+        if remaining[0].isalpha():
+            series = "".join(_ALPHA_CORRECTIONS.get(c, c) for c in remaining[:1])
+            number = "".join(_DIGIT_CORRECTIONS.get(c, c) for c in remaining[1:])
+        else:
+            series = ""
+            number = "".join(_DIGIT_CORRECTIONS.get(c, c) for c in remaining)
+        return state + dist + series + number
+
+    # Fallback for non-standard lengths
     letters = []
     digits = []
     found_digit = False

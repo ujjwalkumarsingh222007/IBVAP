@@ -1,7 +1,7 @@
 """
 IBVAP - Member 2 ANPR Module - main.py
 
-Command-line entry point and demo runner for the ANPR module.
+Command-line entry point, demo runner, and performance benchmark for the ANPR module.
 
 Usage:
     # Run mock demo
@@ -9,6 +9,9 @@ Usage:
 
     # Run on a local image using real or mock pipeline
     python -m ai.member2_anpr.main --image path/to/vehicle.jpg --camera CAM-01
+
+    # Run performance benchmark
+    python -m ai.member2_anpr.main --benchmark --num-frames 30 --mock
 """
 
 from __future__ import annotations
@@ -21,6 +24,7 @@ import sys
 import cv2
 import numpy as np
 
+from .benchmark import ANPRBenchmark
 from .config import default_config
 from .detector import MockPlateDetector, YOLOPlateDetector
 from .event_generator import ANPREventGenerator
@@ -65,6 +69,15 @@ def build_pipeline(use_mock: bool, model_path: str | None = None) -> ANPRPipelin
     )
 
 
+def run_benchmark_cli(pipeline: ANPRPipeline, num_frames: int, use_mock: bool) -> None:
+    """Execute benchmark and print results."""
+    mode = "mock" if use_mock else "real"
+    benchmark = ANPRBenchmark(mode=mode)
+    logger.info("Running benchmark (%d frames, mode=%s)...", num_frames, mode)
+    report = benchmark.run_benchmark(pipeline=pipeline, num_frames=num_frames)
+    print("\n" + report.summary_table() + "\n")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="IBVAP Member 2 ANPR Module Runner")
     parser.add_argument("--image", type=str, help="Path to input image file (optional)")
@@ -72,8 +85,25 @@ def main() -> None:
     parser.add_argument("--vehicle-id", type=str, default=None, help="Associated vehicle ID")
     parser.add_argument("--mock", action="store_true", help="Force mock components")
     parser.add_argument("--model-path", type=str, default=None, help="Path to YOLO license plate model (.pt)")
+    parser.add_argument("--benchmark", action="store_true", help="Run performance benchmark")
+    parser.add_argument("--num-frames", type=int, default=30, help="Number of benchmark iterations (default: 30)")
 
     args = parser.parse_args()
+
+    # Determine mock status
+    if not args.image and not args.model_path and not args.benchmark:
+        args.mock = True
+
+    try:
+        pipeline = build_pipeline(use_mock=args.mock, model_path=args.model_path)
+    except Exception as err:
+        logger.error("Pipeline initialization failed: %s", err)
+        sys.exit(1)
+
+    # If benchmark requested
+    if args.benchmark:
+        run_benchmark_cli(pipeline=pipeline, num_frames=args.num_frames, use_mock=args.mock)
+        return
 
     # Load image or generate synthetic frame
     if args.image:
@@ -88,14 +118,6 @@ def main() -> None:
     else:
         logger.info("No --image specified; generating synthetic frame for demo.")
         frame = np.full((480, 640, 3), fill_value=128, dtype=np.uint8)
-        # If no image specified and mock not explicitly set, default to mock
-        args.mock = True
-
-    try:
-        pipeline = build_pipeline(use_mock=args.mock, model_path=args.model_path)
-    except Exception as err:
-        logger.error("Pipeline initialization failed: %s", err)
-        sys.exit(1)
 
     logger.info("Processing frame...")
     results = pipeline.process_frame(

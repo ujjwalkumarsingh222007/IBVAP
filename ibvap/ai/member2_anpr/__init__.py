@@ -7,6 +7,7 @@ Exposes the high-level public interface so that downstream consumers
 depend on internal implementation details.
 """
 
+from .benchmark import ANPRBenchmark, BenchmarkReport, ComponentTiming
 from .config import ANPRConfig, default_config
 from .detector import BasePlateDetector, MockPlateDetector, YOLOPlateDetector
 from .event_generator import ANPREventGenerator
@@ -29,6 +30,9 @@ __all__ = [
     "ANPRPipeline",
     "ANPRConfig",
     "default_config",
+    "ANPRBenchmark",
+    "BenchmarkReport",
+    "ComponentTiming",
     "BasePlateDetector",
     "MockPlateDetector",
     "YOLOPlateDetector",
@@ -51,5 +55,5 @@ __all__ = [
     "EventType",
 ]
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 __author__ = "Member 2 - ANPR Developer"
