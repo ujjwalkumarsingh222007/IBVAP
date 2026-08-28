@@ -138,6 +138,7 @@ class ANPRResult(BaseModel):
     watchlist_match: bool = Field(default=False)
     watchlist_status: Optional[str] = Field(default=None)
     watchlist_reason: Optional[str] = Field(default=None)
+    duplicate_suppressed: bool = Field(default=False, description="True if this detection was suppressed as a stream duplicate")
     event: Optional[IBVAPEvent] = Field(default=None)
     error: Optional[str] = Field(default=None, description="Set when pipeline encountered an error")
 

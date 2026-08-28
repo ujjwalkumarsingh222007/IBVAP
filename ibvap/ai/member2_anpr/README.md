@@ -2,7 +2,7 @@
 
 **IBVAP (Intelligent Border Video Analytics Platform)**  
 Module: `ai/member2_anpr/`  
-Phase: 3 — Real-World ANPR Validation, Robustness Testing & Performance  
+Phase: 4 — Production & Backend Integration Readiness  
 
 ---
 
@@ -10,7 +10,7 @@ Phase: 3 — Real-World ANPR Validation, Robustness Testing & Performance
 
 The **ANPR (Automatic Number Plate Recognition)** subsystem processes video frames and cropped vehicle regions to detect license plates, enhance plate images, perform OCR, normalize and validate Indian registration numbers, match against active watchlists, and generate standardized `IBVAPEvent` payloads for Member 3's backend.
 
-Phase 3 introduces real-world robustness testing across 10 distinct surveillance conditions (blurry plates, low-light/night, perspective warp, multi-plate, invalid OCR rejection, character confusion), a component-level latency & throughput benchmarking tool (`ANPRBenchmark`), and expanded test coverage (166 passing tests).
+Phase 4 establishes the **Backend Integration Contract** for Member 3 (FastAPI), introduces thread-safe **In-Memory Duplicate Event Suppression** for live CCTV video streams, provides configuration validation, and ensures production-ready error handling across 189 automated tests (91% code coverage).
 
 ---
 
@@ -20,11 +20,13 @@ Member 2 exclusively owns all code under `ai/member2_anpr/`.
 
 | Responsibility | Module | Class / Helper |
 |---|---|---|
+| Public integration interface | `__init__.py` | `process_frame_to_events()` |
 | License plate detection | `detector.py` | `BasePlateDetector`, `MockPlateDetector`, `YOLOPlateDetector` |
 | Image preprocessing | `preprocessing.py` | `PlatePreprocessor` (resize, CLAHE, bilateral filter, binarization) |
 | Optical Character Recognition (OCR) | `ocr.py` | `BaseOCREngine`, `MockOCREngine`, `EasyOCREngine` |
 | Plate normalisation & validation | `recognizer.py` | `PlateRecognizer`, `normalise_plate()`, `validate_indian_plate()` |
-| In-memory watchlist matching | `watchlist.py` | `BaseWatchlistMatcher`, `InMemoryWatchlistMatcher` |
+| Duplicate event suppression | `suppressor.py` | `DuplicateSuppressor` (thread-safe, in-memory) |
+| Watchlist matching | `watchlist.py` | `BaseWatchlistMatcher`, `InMemoryWatchlistMatcher` |
 | Standardised event generation | `event_generator.py` | `ANPREventGenerator` |
 | End-to-end orchestration | `pipeline.py` | `ANPRPipeline` |
 | Benchmarking & profiling | `benchmark.py` | `ANPRBenchmark`, `BenchmarkReport`, `ComponentTiming` |
@@ -37,7 +39,7 @@ Member 2 exclusively owns all code under `ai/member2_anpr/`.
 ## 3. Architecture
 
 ```text
-Input Frame (NumPy BGR array)
+Input Video Frame (NumPy BGR array)
       │
       ▼
 YOLOPlateDetector / BasePlateDetector
@@ -60,19 +62,106 @@ InMemoryWatchlistMatcher / BaseWatchlistMatcher
       │   → WatchlistResult (is_match, status, reason)
       │
       ▼
+DuplicateSuppressor (In-Memory Stream Filter)
+      │   → Filter duplicate detections within time window
+      │
+      ▼
 ANPREventGenerator
       │   → IBVAPEvent (camera_id, event_type, confidence, metadata)
       │
       ▼
-List[ANPRResult]
+List[IBVAPEvent] ───► Member 3 Backend (FastAPI Ingestion)
 ```
 
 ---
 
-## 4. Installation
+## 4. Backend Integration Contract (Member 3)
+
+Member 3 (FastAPI Backend) consumes standardized `IBVAPEvent` objects without depending on internal YOLO, EasyOCR, or preprocessing classes.
+
+### How Member 3 Consumes ANPR Events
+
+Member 3 can simply call `process_frame_to_events()` directly from video processing workers or API handlers:
+
+```python
+from ai.member2_anpr import process_frame_to_events, IBVAPEvent
+
+# When a video frame arrives from camera stream:
+events: list[IBVAPEvent] = process_frame_to_events(
+    frame=opencv_bgr_frame,
+    camera_id="CAM-BORDER-01",
+    vehicle_id="VEH-8821",          # Optional: supplied by Member 1's tracker
+    suppress_duplicates=True,       # Default: suppresses stream duplicate events
+)
+
+# Ingest events into backend database / API emission
+for event in events:
+    event_payload = event.model_dump()
+    print(f"Ingesting {event.event_type.value} event: {event_payload}")
+```
+
+### Event Payload Formats
+
+#### Standard ANPR Detection (`ANPR_DETECTED`):
+```json
+{
+  "camera_id": "CAM-BORDER-01",
+  "event_type": "ANPR_DETECTED",
+  "timestamp": "2026-08-28T15:30:00+00:00",
+  "confidence": 0.92,
+  "metadata": {
+    "plate_number": "TN09AB1234",
+    "raw_ocr_text": "TN 09 AB 1234",
+    "plate_confidence": 0.94,
+    "ocr_confidence": 0.91,
+    "vehicle_id": "VEH-8821",
+    "watchlist_match": false,
+    "validation_passed": true,
+    "validation_reason": "Standard Indian Plate (TN)"
+  }
+}
+```
+
+#### Watchlist Hit (`WATCHLIST_MATCH`):
+```json
+{
+  "camera_id": "CAM-BORDER-01",
+  "event_type": "WATCHLIST_MATCH",
+  "timestamp": "2026-08-28T15:30:00+00:00",
+  "confidence": 0.93,
+  "metadata": {
+    "plate_number": "MH12DE1433",
+    "raw_ocr_text": "MH12DE1433",
+    "plate_confidence": 0.95,
+    "ocr_confidence": 0.92,
+    "vehicle_id": "VEH-9012",
+    "watchlist_match": true,
+    "watchlist_status": "STOLEN",
+    "watchlist_reason": "Reported stolen - 2026-01-15",
+    "validation_passed": true,
+    "validation_reason": "Standard Indian Plate (MH)"
+  }
+}
+```
+
+---
+
+## 5. Duplicate Event Suppression
+
+Continuous CCTV video streams process 20–30 frames per second. Detecting the same vehicle across consecutive frames would flood downstream backend APIs.
+
+The `DuplicateSuppressor` module provides thread-safe in-memory filtering:
+- Tracks `(camera_id, normalized_plate) -> last_seen_epoch_seconds`.
+- Discards / flags events occurring within `ANPR_DUPLICATE_WINDOW_SEC` (default: 10 seconds).
+- Distinguishes different cameras (the same vehicle appearing at a different checkpoint is recorded).
+- Automatically evicts expired timestamps to bound memory usage without requiring Redis or PostgreSQL.
+
+---
+
+## 6. Installation & Dependencies
 
 ```bash
-# Navigate to repository root
+# Navigate to module directory
 cd ibvap/ai/member2_anpr
 
 # Install dependencies
@@ -81,7 +170,7 @@ pip install -r requirements.txt
 
 ---
 
-## 5. Model Setup & Weights
+## 7. Model Setup & Weights
 
 ### License Plate Detection (YOLO)
 Place your trained YOLO license plate detection weights (`.pt` file) in `ai/member2_anpr/models/`:
@@ -92,7 +181,7 @@ ai/member2_anpr/
     └── license_plate.pt
 ```
 
-Set the model path via environment variable or pass it to `YOLOPlateDetector`:
+Configure the path via environment variables:
 ```bash
 export PLATE_MODEL_PATH="models/license_plate.pt"
 export PLATE_DEVICE="cpu" # or "cuda"
@@ -108,12 +197,10 @@ export ANPR_OCR_GPU="false"
 
 ---
 
-## 6. Usage & CLI
-
-### CLI Demo Runner
+## 8. Usage & CLI
 
 ```bash
-# Run simulation using mock components (no weights required)
+# Run simulation demo using mock components (no weights required)
 python -m ai.member2_anpr.main --mock
 
 # Run on a local vehicle image with mock pipeline
@@ -126,118 +213,33 @@ python -m ai.member2_anpr.main --image test_vehicle.jpg --model-path models/lice
 python -m ai.member2_anpr.main --benchmark --num-frames 30 --mock
 ```
 
-### Python API Example
+---
 
-```python
-import cv2
-from ai.member2_anpr import (
-    ANPRPipeline,
-    YOLOPlateDetector,
-    EasyOCREngine,
-    PlateRecognizer,
-    InMemoryWatchlistMatcher,
-    ANPREventGenerator,
-)
+## 9. Configuration Reference
 
-# Initialize components once
-detector = YOLOPlateDetector(model_path="models/license_plate.pt", device="cpu")
-ocr = EasyOCREngine(languages=["en"], gpu=False)
-recognizer = PlateRecognizer()
-watchlist = InMemoryWatchlistMatcher()
-event_gen = ANPREventGenerator()
+Environment variables supported by `config.py`:
 
-# Build pipeline via dependency injection
-pipeline = ANPRPipeline(
-    detector=detector,
-    ocr_engine=ocr,
-    recognizer=recognizer,
-    watchlist=watchlist,
-    event_generator=event_gen,
-)
-
-# Process a frame
-frame = cv2.imread("traffic_snapshot.jpg")
-results = pipeline.process_frame(
-    frame=frame,
-    camera_id="CAM-BORDER-01",
-    vehicle_id="VEH-4092",
-)
-
-for result in results:
-    if result.success:
-        print(f"Plate: {result.plate_number}")
-        print(f"Plate Conf: {result.plate_confidence}, OCR Conf: {result.ocr_confidence}")
-        print(f"Watchlist Hit: {result.watchlist_match}")
-        print(f"Event: {result.event.model_dump()}")
-```
+| Environment Variable | Default | Description |
+|---|---|---|
+| `PLATE_MODEL_PATH` | `models/license_plate.pt` | Path to YOLO detector model weights |
+| `PLATE_CONFIDENCE_THRESHOLD` | `0.40` | Detection score threshold for plate bounding boxes |
+| `PLATE_DEVICE` | `cpu` | Device for detector inference (`cpu` / `cuda`) |
+| `ANPR_OCR_BACKEND` | `mock` | Default OCR engine (`mock` / `easyocr`) |
+| `ANPR_OCR_CONF` | `0.40` | Minimum acceptable OCR confidence |
+| `ANPR_OCR_LANGUAGES` | `en` | Comma-separated OCR languages (e.g. `en`) |
+| `ANPR_OCR_GPU` | `false` | Enable/disable GPU for EasyOCR |
+| `ANPR_PREPROCESS_ENABLED` | `true` | Enable bilateral filtering, CLAHE, and thresholding |
+| `ANPR_PREPROCESS_WIDTH` | `320` | Standard target width for cropped plate images |
+| `ANPR_DUPLICATE_SUPPRESSION_ENABLED` | `true` | Enable duplicate event suppression for live streams |
+| `ANPR_DUPLICATE_WINDOW_SEC` | `10.0` | Duplicate suppression time window (seconds) |
+| `ANPR_DEFAULT_CAMERA_ID` | `CAM-01` | Default camera ID identifier |
+| `ANPR_LOG_LEVEL` | `INFO` | Python logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 
 ---
 
-## 7. Performance Benchmarking
+## 10. Testing & Coverage
 
-The `benchmark.py` module provides latency measurement across all pipeline stages:
-
-```python
-from ai.member2_anpr import ANPRPipeline, ANPRBenchmark
-
-pipeline = ANPRPipeline()
-benchmark = ANPRBenchmark(mode="mock")
-report = benchmark.run_benchmark(pipeline=pipeline, num_frames=50)
-
-print(report.summary_table())
-```
-
-Sample Benchmark Output:
-```text
-=================================================================
-IBVAP ANPR Performance Benchmark Report (Mode: MOCK)
-=================================================================
-Total Frames Processed : 50
-Total Elapsed Time     : 0.075 s
-Overall Throughput     : 668.42 FPS
-Pipeline Mean Latency  : 0.25 ms (+/- 0.04 ms)
-Pipeline Latency Range : [0.18 ms - 0.38 ms]
------------------------------------------------------------------
-Component              | Mean (ms)  | Median   | Min      | Max     
------------------------------------------------------------------
-Detector               | 0.01       | 0.01     | 0.01     | 0.08    
-Preprocessor           | 1.15       | 1.04     | 0.92     | 2.80    
-OCR Engine             | 0.02       | 0.02     | 0.01     | 0.05    
-Plate Recognizer       | 0.04       | 0.04     | 0.03     | 0.06    
-=================================================================
-```
-
----
-
-## 8. Real-World Robustness Validation
-
-The module is verified against 10 critical surveillance conditions:
-
-1. **Clear Plates:** Standard high-contrast Indian registration plates.
-2. **Blurry Plates:** Defocus (Gaussian blur) and vehicle motion blur simulated via kernel convolution; verified preprocessing stability.
-3. **Low-Light / Night:** High-noise, dark images enhanced via bilateral filter and CLAHE contrast equalization.
-4. **Angled / Perspective Distortion:** Plates with perspective warp and non-standard aspect ratios.
-5. **Multiple Plates:** Multi-vehicle frames returning independent `ANPRResult` instances.
-6. **No Plate Detected:** Clean empty returns with zero crashes or false alarms.
-7. **Invalid OCR:** Random noise and impossible plate structures safely rejected by `validate_indian_plate()`.
-8. **OCR Character Confusion:** Conservative position-aware correction (`O↔0`, `I↔1`, `Z↔2`, `S↔5`, `B↔8`, `G↔6`).
-9. **Watchlist Edge Cases:** Leading/trailing whitespace, case insensitivity, duplicate entries, and empty watchlist.
-10. **Vehicle ID Integrity:** Consistent propagation of `vehicle_id` into event metadata.
-
----
-
-## 9. Limitations & Practical Considerations
-
-- **Extreme Angles (> 45°):** Highly skewed plates may suffer OCR degradation without 4-point perspective rectification.
-- **Heavy Motion Blur:** Preprocessing enhances contrast but cannot reconstruct severely smudged characters without deblurring networks.
-- **CPU vs GPU:** On CPU, EasyOCR inference averages ~150–300 ms/crop; on CUDA GPU, latency drops to ~15–35 ms/crop.
-- **Non-Standard Font Stylings:** Decorative or embossed font variations may require custom OCR fine-tuning.
-
----
-
-## 10. Testing
-
-The entire test suite executes in ~0.5s on CPU without requiring GPU or downloaded model weights:
+The entire test suite executes in ~1.3s on CPU without requiring GPU, network, or downloaded model weights:
 
 ```bash
 # Run all tests
@@ -256,33 +258,18 @@ Test modules:
 - `test_recognizer.py`: Normalisation, confusion map correction, and Indian registration validation
 - `test_watchlist.py`: Watchlist matching, case insensitivity, and dynamic additions
 - `test_event_generator.py`: `ANPR_DETECTED` / `WATCHLIST_MATCH` event construction & `vehicle_id` support
+- `test_duplicate_suppression.py`: Thread-safe duplicate suppression, window expiry, and camera isolation
+- `test_integration_interface.py`: Public backend ingestion helper (`process_frame_to_events`) and serialization
+- `test_config.py`: Configuration validation rules and boundary checking
 - `test_pipeline.py`: End-to-end pipeline orchestration, multi-plate processing, error isolation
 - `test_robustness.py`: 10-area robustness validation (blurry, dark, angled, noisy, multi-plate, etc.)
 - `test_benchmark.py`: Benchmarking latency, FPS computation, and report serialization
 
 ---
 
-## 11. Backend Integration
+## 11. Known Limitations
 
-Member 2 produces standardized `IBVAPEvent` payloads that Member 3 (Backend) will ingest via its REST API:
-
-```json
-{
-  "camera_id": "CAM-01",
-  "event_type": "ANPR_DETECTED",
-  "timestamp": "2026-08-28T15:30:00+00:00",
-  "confidence": 0.92,
-  "metadata": {
-    "plate_number": "TN09AB1234",
-    "raw_ocr_text": "TN 09 AB 1234",
-    "plate_confidence": 0.94,
-    "ocr_confidence": 0.91,
-    "vehicle_id": "VEH-101",
-    "watchlist_match": false,
-    "validation_passed": true,
-    "validation_reason": "Standard Indian Plate (TN)"
-  }
-}
-```
-
-The backend needs only to consume `IBVAPEvent` without any coupling to detector, OCR, or preprocessing internals.
+- **Extreme Angles (> 45°):** Highly skewed plates may experience lower OCR accuracy without 4-point perspective rectification.
+- **Heavy Motion Blur:** Preprocessing enhances edge contrast, but severely smeared characters cannot be reconstructed without specialized deblurring neural networks.
+- **CPU vs GPU:** On CPU, EasyOCR inference averages ~150–300 ms/crop; on CUDA GPU, latency drops to ~15–35 ms/crop.
+- **Decorative Fonts:** Non-standard or embossed typography on non-HSRP plates may require OCR fine-tuning.

@@ -4,8 +4,8 @@ IBVAP - Member 2 ANPR Module - pipeline.py
 Top-level ANPR pipeline. Wires together:
 
     Frame -> BasePlateDetector -> (crop) -> BaseOCREngine
-          -> PlateRecognizer -> BaseWatchlistMatcher -> ANPREventGenerator
-          -> ANPRResult
+          -> PlateRecognizer -> BaseWatchlistMatcher -> DuplicateSuppressor
+          -> ANPREventGenerator -> ANPRResult
 
 Public interface
 ----------------
@@ -27,6 +27,7 @@ from .event_generator import ANPREventGenerator
 from .ocr import BaseOCREngine, MockOCREngine
 from .recognizer import PlateRecognizer
 from .schemas import ANPRResult, PlateRegion, WatchlistResult
+from .suppressor import DuplicateSuppressor
 from .watchlist import BaseWatchlistMatcher, InMemoryWatchlistMatcher
 
 logger = logging.getLogger(__name__)
@@ -41,7 +42,7 @@ class ANPRPipeline:
     """
     Orchestrates the end-to-end ANPR workflow on a video frame.
 
-    All components are injected for easy testing and upgrading.
+    All components are injected for easy testing, swappability, and upgrades.
     """
 
     def __init__(
@@ -51,6 +52,7 @@ class ANPRPipeline:
         recognizer: Optional[PlateRecognizer] = None,
         watchlist: Optional[BaseWatchlistMatcher] = None,
         event_generator: Optional[ANPREventGenerator] = None,
+        duplicate_suppressor: Optional[DuplicateSuppressor] = None,
         config: Optional[ANPRConfig] = None,
     ) -> None:
         self._config = config if config is not None else default_config
@@ -60,10 +62,22 @@ class ANPRPipeline:
         self._watchlist = watchlist if watchlist is not None else InMemoryWatchlistMatcher()
         self._event_gen = event_generator if event_generator is not None else ANPREventGenerator()
 
+        # Initialize duplicate suppressor from config if not injected
+        if duplicate_suppressor is not None:
+            self._suppressor = duplicate_suppressor
+        elif self._config.duplicate_suppression_enabled:
+            self._suppressor = DuplicateSuppressor(
+                window_seconds=self._config.duplicate_suppression_window_seconds,
+                enabled=True,
+            )
+        else:
+            self._suppressor = None
+
         logger.info(
-            "ANPRPipeline initialised -- detector=%s, ocr=%s",
+            "ANPRPipeline initialised -- detector=%s, ocr=%s, suppression=%s",
             type(self._detector).__name__,
             type(self._ocr).__name__,
+            "ENABLED" if self._suppressor and self._suppressor.enabled else "DISABLED",
         )
 
     def process_frame(
@@ -177,6 +191,14 @@ class ANPRPipeline:
             logger.warning("Watchlist lookup failed: %s", exc)
             watchlist_result = None
 
+        # Check duplicate event suppression
+        is_suppressed = False
+        if self._suppressor is not None:
+            is_suppressed = self._suppressor.should_suppress(
+                camera_id=camera_id,
+                plate_number=recognition.plate_number,
+            )
+
         try:
             event = self._event_gen.generate(
                 camera_id=camera_id,
@@ -186,6 +208,8 @@ class ANPRPipeline:
                 timestamp=timestamp,
                 vehicle_id=vehicle_id,
             )
+            if is_suppressed and event is not None:
+                event.metadata["duplicate_suppressed"] = True
         except Exception as exc:
             logger.error("Event generation failed: %s", exc, exc_info=True)
             return ANPRResult(error=f"Event generation error: {exc}", vehicle_id=vehicle_id)
@@ -198,6 +222,7 @@ class ANPRPipeline:
             watchlist_match=watchlist_result.is_match if watchlist_result else False,
             watchlist_status=watchlist_result.status if watchlist_result else None,
             watchlist_reason=watchlist_result.reason if watchlist_result else None,
+            duplicate_suppressed=is_suppressed,
             event=event,
         )
 
