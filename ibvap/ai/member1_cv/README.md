@@ -3,6 +3,8 @@
 > **Phase 1A Pipeline:** Video → OpenCV → YOLOv8 → Person & Vehicle Detection → Bounding Boxes + Confidence
 >
 > **Phase 1B Pipeline:** Detection → ByteTrack → Persistent Track IDs
+>
+> **Phase 1C Pipeline:** Tracking → Virtual Fence → Intrusion Detection → Structured Event
 
 ---
 
@@ -26,6 +28,20 @@
 > It does **not** mean *"this is a permanently identified person."*
 > IDs may change after long occlusion or when an object leaves and re-enters the scene — this is expected tracker behaviour.
 
+### Phase 1C — Virtual Fence + Intrusion Detection
+* Everything Phase 1B does, **plus**:
+* Defines a configurable **polygonal restricted zone** (virtual fence) on the video frame.
+* Uses the **bounding-box centre point** of each tracked object to test whether it is inside the polygon.
+* Detects the **OUTSIDE → INSIDE transition** for each track ID exactly once per entry episode.
+* Generates a structured `IntrusionEvent` when a tracked object crosses into the zone.
+* Draws the fence polygon on every frame (orange = clear, red = active intrusion).
+* Displays a red **`!! INTRUSION !!`** banner on frames where a new crossing occurs.
+* Prints a JSON intrusion event to the console on the frame of crossing — never repeatedly.
+
+> **Important:** An intrusion event means *"a tracked object crossed from outside to inside the restricted zone."*
+> It does **not** mean *"a specific person has been identified."*
+> Track IDs are motion-based, not biometric.
+
 ---
 
 ## Directory structure
@@ -38,10 +54,15 @@ ai/member1_cv/
 ├── tracking/
 │   ├── __init__.py         # package export
 │   └── tracker.py          # ObjectTracker class (Phase 1B)
+├── intrusion/
+│   ├── __init__.py         # package export
+│   ├── fence.py            # VirtualFence — configurable polygon (Phase 1C)
+│   └── detector.py         # IntrusionDetector + IntrusionEvent (Phase 1C)
 ├── models/                 # put custom .pt weights here
 ├── tests/
-│   ├── test_detector.py    # Phase 1A unit tests
-│   └── test_tracker.py     # Phase 1B unit tests
+│   ├── test_detector.py    # Phase 1A unit tests  (13 tests)
+│   ├── test_tracker.py     # Phase 1B unit tests  (18 tests)
+│   └── test_intrusion.py   # Phase 1C unit tests  (41 tests)
 ├── main.py                 # CLI entry point / video loop
 ├── requirements.txt
 └── README.md
@@ -98,16 +119,30 @@ python main.py --model models/custom.pt # local weights file
 
 ## Running
 
-### Webcam — tracking ON (default, Phase 1B)
+### Phase 1C — Webcam with virtual fence + intrusion detection (default)
 
 ```bash
 python main.py
 ```
 
-### Webcam — detection only (Phase 1A mode)
+### Phase 1C — Video file with virtual fence
+
+```bash
+python main.py --source path/to/video.mp4
+```
+
+### Phase 1B — Tracking only (no fence)
+
+```bash
+python main.py --no-fence
+python main.py --source path/to/video.mp4 --no-fence
+```
+
+### Phase 1A — Detection only (no tracking, no fence)
 
 ```bash
 python main.py --no-track
+python main.py --source path/to/video.mp4 --no-track
 ```
 
 ### Specific webcam index
@@ -116,16 +151,12 @@ python main.py --no-track
 python main.py --source 1
 ```
 
-### Video file — tracking ON
+### Custom fence polygon via CLI
 
 ```bash
-python main.py --source path/to/video.mp4
-```
-
-### Video file — detection only
-
-```bash
-python main.py --source path/to/video.mp4 --no-track
+# Format: "x1,y1;x2,y2;x3,y3;x4,y4"
+python main.py --fence "100,80;700,80;700,450;100,450"
+python main.py --source video.mp4 --fence "50,50;300,50;300,300;50,300"
 ```
 
 ---
@@ -139,7 +170,9 @@ python main.py --source path/to/video.mp4 --no-track
 | `--confidence` | `-c` | `0.40` | Minimum confidence (0.0 – 1.0) |
 | `--device` | `-d` | *(auto)* | `cpu`, `cuda`, `mps`, or blank |
 | `--tracker` | — | `bytetrack.yaml` | Tracker config (Phase 1B) |
-| `--no-track` | — | off | Run Phase 1A detection-only mode |
+| `--no-track` | — | off | Phase 1A detection-only mode |
+| `--no-fence` | — | off | Disable virtual fence (Phase 1B mode) |
+| `--fence` | — | DEFAULT_FENCE_POLYGON | Custom polygon `"x1,y1;x2,y2;..."` |
 
 ---
 
@@ -177,26 +210,46 @@ python main.py --tracker botsort.yaml
 
 ---
 
+## What an intrusion event means
+
+An **intrusion event** is generated when a tracked object's bounding-box centre crosses from outside to inside the configured restricted polygon.
+
+| Statement | True / False |
+|-----------|-------------|
+| One event per entry episode | **True** |
+| New event while same object stays inside | **False** — silenced after first event |
+| New event after object exits and re-enters | **True** |
+| Event identifies a specific person biometrically | **False** — position-based only |
+
+---
+
 ## Expected output
 
-### Video window
+### Video window (Phase 1C)
 
-Colour-coded bounding boxes with labels:
+* Colour-coded bounding boxes with `#ID class confidence` labels
+* **OUTSIDE** / **IN ZONE** status badge below each tracked box
+* Centre dot: green = outside, red = inside fence
+* Orange fence polygon outline with "RESTRICTED ZONE" label
+* Red banner `!! INTRUSION !!  ID:7 person` on frames where crossing occurs
+* Top-left HUD: FPS, person count, vehicle count, mode, session intrusion count
 
-```
-#1 person 0.93
-#2 car 0.88
-```
-
-Top-left HUD: FPS, person count, vehicle count, mode.
-
-### Console (per frame, Phase 1B)
+### Console (per frame)
 
 ```
-Frame 00042 | FPS  27.8 | persons=2 vehicles=1
-   {'class_name': 'person', 'confidence': 0.9312, 'bbox': {'x1': 102, 'y1': 118, 'x2': 248, 'y2': 497}, 'track_id': 1}
-   {'class_name': 'person', 'confidence': 0.8754, 'bbox': {'x1': 310, 'y1': 95,  'x2': 420, 'y2': 460}, 'track_id': 2}
-   {'class_name': 'car',    'confidence': 0.7643, 'bbox': {'x1': 500, 'y1': 200, 'x2': 750, 'y2': 380}, 'track_id': 3}
+Frame 00041 | FPS  27.8 | persons=1 vehicles=0
+   {'class_name': 'person', 'confidence': 0.9312, 'bbox': {...}, 'track_id': 7}
+
+[INTRUSION EVENT]
+{
+  "event_type": "INTRUSION",
+  "track_id": 7,
+  "class_name": "person",
+  "confidence": 0.9312,
+  "timestamp": "2026-08-28T12:55:03.123456+00:00",
+  "bbox": {"x1": 200, "y1": 150, "x2": 400, "y2": 350},
+  "position": {"x": 300, "y": 250}
+}
 ```
 
 ### Exit
@@ -205,20 +258,44 @@ Press **`q`** in the video window to quit cleanly.
 
 ---
 
+## Configuring the virtual fence
+
+### Option A — Edit the constant (default)
+
+Open [`intrusion/fence.py`](intrusion/fence.py) and change `DEFAULT_FENCE_POLYGON`:
+
+```python
+DEFAULT_FENCE_POLYGON: Polygon = [
+    (200, 100),   # top-left
+    (600, 100),   # top-right
+    (600, 400),   # bottom-right
+    (200, 400),   # bottom-left
+]
+```
+
+### Option B — CLI argument
+
+```bash
+python main.py --fence "200,100;600,100;600,400;200,400"
+```
+
+Format: `"x1,y1;x2,y2;x3,y3;..."` (at least 3 vertices, semicolon-separated).
+
+---
+
 ## Running the tests
 
 ```bash
-# All tests (Phase 1A + 1B)
+# All tests (Phase 1A + 1B + 1C)
 pytest tests/ -v
 
-# Phase 1A only
-pytest tests/test_detector.py -v
-
-# Phase 1B only
-pytest tests/test_tracker.py -v
+# By phase
+pytest tests/test_detector.py -v    # Phase 1A — 13 tests
+pytest tests/test_tracker.py -v     # Phase 1B — 18 tests
+pytest tests/test_intrusion.py -v   # Phase 1C — 41 tests
 ```
 
-Tests use synthetic numpy frames — no webcam or video file is needed.
+Tests use synthetic numpy frames — no webcam, video file, or model needed for Phase 1C tests.
 
 ---
 
@@ -226,8 +303,7 @@ Tests use synthetic numpy frames — no webcam or video file is needed.
 
 | Phase | Extension point |
 |-------|----------------|
-| **1C** — Virtual fence | Add a `FenceChecker` class consuming `List[DetectionResult]` with `track_id` and `bbox` |
-| **1D** — CEF / Backend | Call `det.as_dict()` (already includes `track_id`) and send to FastAPI |
+| **1D** — CEF / Backend | `IntrusionEvent.as_dict()` already matches the output contract; Phase 1D wraps it in CEF and POSTs to FastAPI |
 
 ---
 
@@ -235,7 +311,10 @@ Tests use synthetic numpy frames — no webcam or video file is needed.
 
 * **No GPU auto-install** — install CUDA PyTorch manually if needed.
 * **Single-stream only** — one video source at a time.
-* **ID re-assignment after occlusion** — if an object is hidden for many frames, the tracker may assign a new ID when it reappears.
+* **ID re-assignment after occlusion** — if an object is hidden for many frames, the tracker may assign a new ID when it reappears; this resets its intrusion state.
+* **Fence is pixel-based** — coordinates are absolute pixels, not relative or geo-referenced.
+* **Centre-point check only** — only the bounding-box centre is tested; a partially overlapping object is not yet flagged.
 * **YOLOv8n accuracy** — the nano model is fast but less accurate; use `yolov8s.pt` for better results.
-* **Display requires a screen** — headless servers need the `cv2.imshow` path replaced; this will be addressed in Phase 1D.
-* **No facial or person recognition** — Track IDs are positional/motion-based only.
+* **Display requires a screen** — headless servers need the `cv2.imshow` path replaced; addressed in Phase 1D.
+* **No facial or person recognition** — Track IDs and intrusion events are purely positional/motion-based.
+
