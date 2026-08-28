@@ -32,7 +32,12 @@ from .event_generator import ANPREventGenerator
 from .ocr import BaseOCREngine, MockOCREngine, EasyOCREngine
 from .pipeline import ANPRPipeline
 from .preprocessing import PlatePreprocessor
-from .recognizer import PlateRecognizer, normalise_plate, validate_indian_plate
+from .recognizer import (
+    INDIAN_STATE_CODES,
+    PlateRecognizer,
+    normalise_plate,
+    validate_indian_plate,
+)
 from .schemas import (
     ANPRResult,
     EventType,
@@ -45,6 +50,7 @@ from .schemas import (
 from .stream import RTSPStreamReader, mask_rtsp_url
 from .stream_processor import ANPRStreamProcessor, StreamStatistics
 from .suppressor import DuplicateSuppressor
+from .validator import ANPRValidator, ValidationReport, ValidationResult
 from .watchlist import BaseWatchlistMatcher, InMemoryWatchlistMatcher
 
 # Module-level cached pipeline for convenient zero-config backend ingestion
@@ -116,6 +122,10 @@ __all__ = [
     "ANPRPipeline",
     "ANPRConfig",
     "default_config",
+    "ANPRValidator",
+    "ValidationReport",
+    "ValidationResult",
+    "INDIAN_STATE_CODES",
     "RTSPStreamReader",
     "ANPRStreamProcessor",
     "StreamStatistics",
@@ -146,5 +156,5 @@ __all__ = [
     "EventType",
 ]
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 __author__ = "Member 2 - ANPR Developer"

@@ -1,7 +1,7 @@
 """
 IBVAP - Member 2 ANPR Module - main.py
 
-Command-line entry point, demo runner, RTSP stream processor, and benchmark for the ANPR module.
+Command-line entry point, demo runner, RTSP stream processor, benchmark, and validation suite.
 
 Usage:
     # Run mock simulation demo
@@ -13,6 +13,9 @@ Usage:
     # Run on an RTSP stream / video file with frame skipping
     python -m ai.member2_anpr.main --source rtsp://192.168.1.100:554/stream --frame-skip 4 --max-frames 100
 
+    # Run validation on a directory of images
+    python -m ai.member2_anpr.main --validate --validation-dir path/to/test_images/ --mock
+
     # Run performance benchmark
     python -m ai.member2_anpr.main --benchmark --num-frames 30 --mock
 """
@@ -20,6 +23,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import sys
@@ -36,6 +40,7 @@ from .pipeline import ANPRPipeline
 from .recognizer import PlateRecognizer
 from .stream import RTSPStreamReader, mask_rtsp_url
 from .stream_processor import ANPRStreamProcessor
+from .validator import ANPRValidator
 from .watchlist import InMemoryWatchlistMatcher
 
 logging.basicConfig(
@@ -68,7 +73,7 @@ def build_pipeline(use_mock: bool, model_path: str | None = None) -> ANPRPipelin
     return ANPRPipeline(
         detector=detector,
         ocr_engine=ocr,
-        recognizer=PlateRecognizer(),
+        recognizer=PlateRecognizer(strict=default_config.strict_plate_validation),
         watchlist=InMemoryWatchlistMatcher(),
         event_generator=ANPREventGenerator(),
     )
@@ -81,6 +86,48 @@ def run_benchmark_cli(pipeline: ANPRPipeline, num_frames: int, use_mock: bool) -
     logger.info("Running benchmark (%d frames, mode=%s)...", num_frames, mode)
     report = benchmark.run_benchmark(pipeline=pipeline, num_frames=num_frames)
     print("\n" + report.summary_table() + "\n")
+
+
+def run_validation_cli(
+    pipeline: ANPRPipeline,
+    val_dir: str | None,
+    image_path: str | None,
+    ground_truth: str | None,
+) -> None:
+    """Execute validation runner and print accuracy/latency breakdown."""
+    validator = ANPRValidator(pipeline=pipeline)
+
+    if val_dir:
+        logger.info("Validating image directory: %s", val_dir)
+        gt_map = None
+        if ground_truth and os.path.exists(ground_truth):
+            with open(ground_truth, "r", encoding="utf-8") as f:
+                gt_map = json.load(f)
+        report = validator.validate_directory(dir_path=val_dir, ground_truth_map=gt_map)
+        print("\n" + report.summary_table() + "\n")
+    elif image_path:
+        logger.info("Validating single image: %s", image_path)
+        res = validator.validate_image(image_input=image_path, ground_truth=ground_truth)
+        print("=" * 60)
+        print(f"Validation Result for: {res.source_name}")
+        print(f"  Detected Plate     : {res.plate_number}")
+        print(f"  Confidence (Plate) : {res.plate_confidence}")
+        print(f"  Confidence (OCR)   : {res.ocr_confidence}")
+        print(f"  Format Validated   : {res.validation_passed} ({res.validation_reason})")
+        if res.ground_truth:
+            print(f"  Ground Truth       : {res.ground_truth} -> Match: {res.is_correct}")
+        print(f"  Total Latency      : {res.total_ms:.2f} ms")
+        print("=" * 60)
+    else:
+        logger.info("Running validation demo on synthetic frame...")
+        dummy = np.full((480, 640, 3), fill_value=128, dtype=np.uint8)
+        res = validator.validate_image(image_input=dummy, ground_truth="TN09AB1234")
+        print("=" * 60)
+        print(f"Demo Validation Result:")
+        print(f"  Detected Plate     : {res.plate_number}")
+        print(f"  Ground Truth Match : {res.is_correct}")
+        print(f"  Latency            : {res.total_ms:.2f} ms")
+        print("=" * 60)
 
 
 def run_stream_cli(
@@ -129,6 +176,9 @@ def main() -> None:
     parser.add_argument("--max-frames", type=int, default=None, help="Maximum frames to process in stream")
     parser.add_argument("--benchmark", action="store_true", help="Run performance benchmark")
     parser.add_argument("--num-frames", type=int, default=30, help="Number of benchmark iterations (default: 30)")
+    parser.add_argument("--validate", action="store_true", help="Run real-model validation runner")
+    parser.add_argument("--validation-dir", type=str, default=None, help="Directory of test images for validation")
+    parser.add_argument("--ground-truth", type=str, default=None, help="Expected plate ground truth or path to JSON map")
 
     args = parser.parse_args()
 
@@ -143,7 +193,7 @@ def main() -> None:
             camera_id = args.camera
 
     # Determine mock status
-    if not args.image and not stream_source and not args.model_path and not args.benchmark:
+    if not args.image and not stream_source and not args.model_path and not args.benchmark and not args.validate:
         args.mock = True
 
     try:
@@ -152,12 +202,22 @@ def main() -> None:
         logger.error("Pipeline initialization failed: %s", err)
         sys.exit(1)
 
-    # 1. Benchmark Mode
+    # 1. Validation Mode
+    if args.validate:
+        run_validation_cli(
+            pipeline=pipeline,
+            val_dir=args.validation_dir,
+            image_path=args.image,
+            ground_truth=args.ground_truth,
+        )
+        return
+
+    # 2. Benchmark Mode
     if args.benchmark:
         run_benchmark_cli(pipeline=pipeline, num_frames=args.num_frames, use_mock=args.mock)
         return
 
-    # 2. RTSP / Stream Mode
+    # 3. RTSP / Stream Mode
     if stream_source:
         run_stream_cli(
             source=stream_source,
@@ -169,7 +229,7 @@ def main() -> None:
         )
         return
 
-    # 3. Static Image / Single Frame Mode
+    # 4. Static Image / Single Frame Mode
     if args.image:
         if not os.path.exists(args.image):
             logger.error("Image file not found: %s", args.image)

@@ -2,15 +2,15 @@
 
 **IBVAP (Intelligent Border Video Analytics Platform)**  
 Module: `ai/member2_anpr/`  
-Phase: 5 — Real-Time RTSP/IP-Camera ANPR Integration  
+Phase: 6 — Real-Model Validation & Production Hardening  
 
 ---
 
 ## 1. Overview
 
-The **ANPR (Automatic Number Plate Recognition)** subsystem processes live IP-camera/RTSP video streams and vehicle crops to detect license plates, enhance plate images, perform OCR, normalize and validate Indian registration numbers, match against active watchlists, suppress duplicate detections on continuous streams, and generate standardized `IBVAPEvent` payloads for Member 3's backend.
+The **ANPR (Automatic Number Plate Recognition)** subsystem processes live IP-camera/RTSP video streams, recorded video files, and vehicle image crops to detect license plates, enhance plate images, perform OCR, normalize and validate Indian registration numbers, match against active watchlists, suppress duplicate detections on continuous streams, and generate standardized `IBVAPEvent` payloads for Member 3's backend.
 
-Phase 5 introduces **Real-Time RTSP / Video Stream Ingestion** (`RTSPStreamReader`), **Configurable Frame Sampling & Stream Processing** (`ANPRStreamProcessor`), **Stream Health & Reconnection Management**, and **Runtime Streaming Metrics** across 205 automated tests (90% code coverage).
+Phase 6 introduces **Real-Model Validation Runner** (`ANPRValidator`), **Indian State Code & Structural False-Positive Filtering**, **Strict Validation Modes**, **Production Error Resilience**, and **Component-Level Latency Profiling** across 223 automated unit tests (89% code coverage).
 
 ---
 
@@ -20,13 +20,14 @@ Member 2 exclusively owns all code under `ai/member2_anpr/`.
 
 | Responsibility | Module | Class / Helper |
 |---|---|---|
+| Real-model validation runner | `validator.py` | `ANPRValidator`, `ValidationReport`, `ValidationResult` |
 | RTSP stream capture | `stream.py` | `RTSPStreamReader`, `mask_rtsp_url()` |
 | Real-time stream processing | `stream_processor.py` | `ANPRStreamProcessor`, `StreamStatistics` |
 | Public integration interface | `__init__.py` | `process_frame_to_events()` |
 | License plate detection | `detector.py` | `BasePlateDetector`, `MockPlateDetector`, `YOLOPlateDetector` |
 | Image preprocessing | `preprocessing.py` | `PlatePreprocessor` (resize, CLAHE, bilateral filter, binarization) |
 | Optical Character Recognition (OCR) | `ocr.py` | `BaseOCREngine`, `MockOCREngine`, `EasyOCREngine` |
-| Plate normalisation & validation | `recognizer.py` | `PlateRecognizer`, `normalise_plate()`, `validate_indian_plate()` |
+| Plate normalisation & validation | `recognizer.py` | `PlateRecognizer`, `normalise_plate()`, `validate_indian_plate()`, `INDIAN_STATE_CODES` |
 | Duplicate event suppression | `suppressor.py` | `DuplicateSuppressor` (thread-safe, in-memory) |
 | Watchlist matching | `watchlist.py` | `BaseWatchlistMatcher`, `InMemoryWatchlistMatcher` |
 | Standardised event generation | `event_generator.py` | `ANPREventGenerator` |
@@ -41,13 +42,13 @@ Member 2 exclusively owns all code under `ai/member2_anpr/`.
 ## 3. Architecture
 
 ```text
-IP CCTV / RTSP Stream
+IP CCTV / RTSP Stream / Image Dataset
       │
       ▼
-RTSPStreamReader (with auto-reconnect & credential masking)
+RTSPStreamReader / Image Loader (with credential masking)
       │
       ▼
-ANPRStreamProcessor (with frame sampling/skipping)
+ANPRStreamProcessor / ANPRValidator
       │
       ▼
 YOLOPlateDetector / BasePlateDetector
@@ -62,7 +63,7 @@ EasyOCREngine / BaseOCREngine
       │   → OCRResult (raw_text, confidence, engine)
       │
       ▼
-PlateRecognizer (normalise_plate + validate_indian_plate)
+PlateRecognizer (normalise_plate + validate_indian_plate + State/UT codes)
       │   → RecognitionResult (plate_number, validation_passed, confidence)
       │
       ▼
@@ -83,56 +84,64 @@ List[IBVAPEvent] ───► Member 3 Backend (FastAPI Ingestion)
 
 ---
 
-## 4. RTSP Stream Reading & Processing (Phase 5)
+## 4. Real-Model Validation & Benchmarking (Phase 6)
 
-### Real-Time Stream Ingestion
-The `RTSPStreamReader` manages video connections to IP cameras, RTSP streams, local video files (`.mp4`, `.avi`), and USB webcams:
-- **Resilient Reconnection:** Automatically attempts reconnection on packet drops or connection resets up to `reconnect_attempts` (default: 3) with configurable backoff `reconnect_delay_sec`.
-- **Credential Security:** Automatically masks RTSP credentials in all diagnostic logs (`mask_rtsp_url()`) to prevent password leaks.
-- **Resource Management:** Ensures clean OpenCV `VideoCapture` release on shutdown.
+The `ANPRValidator` evaluates plate detection and character recognition accuracy against ground truth datasets, while recording component-level latency breakdowns:
 
-### Frame Sampling / Skipping
-In live 25–30 FPS video streams, evaluating heavy deep learning models on every single frame causes queue buildup.
-The `ANPRStreamProcessor` implements configurable frame sampling:
-- Setting `frame_skip=4` (via `--frame-skip 4` or `ANPR_FRAME_SKIP=4`) samples 1 out of every 5 frames (~5–6 FPS effective rate).
-- Decouples stream reading from inference to maintain near-real-time throughput.
+### Running Validation
 
-### Python Streaming Example
+```bash
+# Validate on single image with expected ground truth
+python -m ai.member2_anpr.main --validate --image path/to/plate.jpg --ground-truth "DL01AB1234"
 
-```python
-from ai.member2_anpr import (
-    ANPRPipeline,
-    RTSPStreamReader,
-    ANPRStreamProcessor,
-    IBVAPEvent,
-)
+# Validate directory of test images
+python -m ai.member2_anpr.main --validate --validation-dir path/to/test_dataset/
 
-# 1. Initialize pipeline and stream reader
-pipeline = ANPRPipeline()
-stream_reader = RTSPStreamReader(
-    source="rtsp://admin:pass@192.168.1.100:554/live",
-    camera_id="CAM-BORDER-01",
-    reconnect_attempts=3,
-)
+# Validate directory with ground truth mapping JSON
+python -m ai.member2_anpr.main --validate --validation-dir path/to/images/ --ground-truth gt_map.json
+```
 
-# 2. Initialize stream processor with frame sampling
-processor = ANPRStreamProcessor(
-    stream_reader=stream_reader,
-    pipeline=pipeline,
-    frame_skip=4, # Process 1 out of every 5 frames
-)
+### Sample Validation Report Output
 
-# 3. Stream generator yielding events in real time
-for event in processor.process_stream_events():
-    print(f"[{event.event_type.value}] Camera={event.camera_id} Plate={event.metadata.get('plate_number')}")
-
-# 4. View runtime statistics
-print(processor.stats.summary_table())
+```text
+=================================================================
+IBVAP ANPR Real-Model Validation & Performance Report
+=================================================================
+Total Samples Evaluated    : 50
+Successful Detections      : 48 (96.0%)
+Failed / Empty Detections  : 2
+Validation Passed (Indian) : 48
+Ground Truth Evaluated     : 50
+Ground Truth Matches       : 47
+Recognition Accuracy       : 94.0%
+-----------------------------------------------------------------
+Total Elapsed Time         : 1.250 s
+Overall Throughput         : 40.00 FPS
+Mean Pipeline Latency      : 24.50 ms (median: 23.80 ms)
+Latency Range              : [18.20 ms - 34.10 ms]
+-----------------------------------------------------------------
+Component Mean Latency Breakdown:
+  - Detector               : 8.20 ms
+  - Preprocessor           : 1.10 ms
+  - OCR Engine             : 14.80 ms
+  - Plate Recognizer       : 0.40 ms
+=================================================================
 ```
 
 ---
 
-## 5. Backend Integration Contract (Member 3)
+## 5. False-Positive Filtering & Indian State Codes
+
+To eliminate OCR hallucinations and noisy background detections, `recognizer.py` validates plates against:
+
+1. **State & UT Codes (`INDIAN_STATE_CODES`):** Verifies the 2-letter prefix against official codes (`DL`, `MH`, `TN`, `KA`, `UP`, `HR`, `GJ`, `WB`, `KL`, `RJ`, `TS`, `AP`, `PB`, `BR`, `JH`, `CH`, etc.).
+2. **Bharat (BH) Series:** Formats like `22BH1234AA` (Year + BH + 4 Digits + Series).
+3. **Position-Aware Character Confusion:** Automatically disambiguates `O↔0`, `I↔1`, `Z↔2`, `S↔5`, `B↔8`, `G↔6` based on character index position in Indian registration formats.
+4. **Strict Validation Mode:** Setting `strict_plate_validation = True` (or `ANPR_STRICT_VALIDATION="true"`) strictly discards any plate that does not match standard registration structure.
+
+---
+
+## 6. Backend Integration Contract (Member 3)
 
 Member 3 (FastAPI Backend) consumes standardized `IBVAPEvent` objects without depending on internal YOLO, EasyOCR, or preprocessing classes.
 
@@ -200,79 +209,7 @@ for event in events:
 
 ---
 
-## 6. Duplicate Event Suppression
-
-Continuous CCTV video streams process 20–30 frames per second. Detecting the same vehicle across consecutive frames would flood downstream backend APIs.
-
-The `DuplicateSuppressor` module provides thread-safe in-memory filtering:
-- Tracks `(camera_id, normalized_plate) -> last_seen_epoch_seconds`.
-- Discards / flags events occurring within `ANPR_DUPLICATE_WINDOW_SEC` (default: 10 seconds).
-- Distinguishes different cameras (the same vehicle appearing at a different checkpoint is recorded).
-- Automatically evicts expired timestamps to bound memory usage without requiring Redis or PostgreSQL.
-
----
-
-## 7. Installation & Dependencies
-
-```bash
-# Navigate to module directory
-cd ibvap/ai/member2_anpr
-
-# Install dependencies
-pip install -r requirements.txt
-```
-
----
-
-## 8. Model Setup & Weights
-
-### License Plate Detection (YOLO)
-Place your trained YOLO license plate detection weights (`.pt` file) in `ai/member2_anpr/models/`:
-
-```text
-ai/member2_anpr/
-└── models/
-    └── license_plate.pt
-```
-
-Configure the path via environment variables:
-```bash
-export PLATE_MODEL_PATH="models/license_plate.pt"
-export PLATE_DEVICE="cpu" # or "cuda"
-```
-
-> **Note:** Model weights are not committed to Git. If the model file is not present, `YOLOPlateDetector` raises an informative `FileNotFoundError`. The automated unit test suite uses mocks and does not require weights.
-
-### OCR (EasyOCR)
-EasyOCR automatically downloads lightweight character recognition models to `~/.EasyOCR/` upon first invocation. To disable GPU on CPU-only machines:
-```bash
-export ANPR_OCR_GPU="false"
-```
-
----
-
-## 9. Usage & CLI
-
-```bash
-# Run simulation demo using mock components (no weights required)
-python -m ai.member2_anpr.main --mock
-
-# Run on a local vehicle image with mock pipeline
-python -m ai.member2_anpr.main --mock --image test_vehicle.jpg --camera-id CAM-01 --vehicle-id VEH-101
-
-# Run with real YOLO + EasyOCR pipeline on a local image
-python -m ai.member2_anpr.main --image test_vehicle.jpg --model-path models/license_plate.pt
-
-# Run live RTSP video stream with frame skipping
-python -m ai.member2_anpr.main --source rtsp://admin:pass@192.168.1.100:554/stream --frame-skip 4 --camera-id CAM-GATE-01
-
-# Run performance benchmark
-python -m ai.member2_anpr.main --benchmark --num-frames 30 --mock
-```
-
----
-
-## 10. Configuration Reference
+## 7. Configuration Reference
 
 Environment variables supported by `config.py`:
 
@@ -283,6 +220,8 @@ Environment variables supported by `config.py`:
 | `PLATE_DEVICE` | `cpu` | Device for detector inference (`cpu` / `cuda`) |
 | `ANPR_OCR_BACKEND` | `mock` | Default OCR engine (`mock` / `easyocr`) |
 | `ANPR_OCR_CONF` | `0.40` | Minimum acceptable OCR confidence |
+| `ANPR_MIN_PLATE_CONF` | `0.40` | Overall minimum confidence for plate emission |
+| `ANPR_STRICT_VALIDATION` | `false` | Enable strict Indian state code & structure check |
 | `ANPR_OCR_LANGUAGES` | `en` | Comma-separated OCR languages (e.g. `en`) |
 | `ANPR_OCR_GPU` | `false` | Enable/disable GPU for EasyOCR |
 | `ANPR_PREPROCESS_ENABLED` | `true` | Enable bilateral filtering, CLAHE, and thresholding |
@@ -299,7 +238,7 @@ Environment variables supported by `config.py`:
 
 ---
 
-## 11. Testing & Coverage
+## 8. Testing & Coverage
 
 The entire test suite executes in ~1.5s on CPU without requiring GPU, network, camera hardware, or downloaded model weights:
 
@@ -311,29 +250,11 @@ python -m pytest ai/member2_anpr/tests/ -v
 python -m pytest ai/member2_anpr/tests/ -v --cov=ai.member2_anpr --cov-report=term-missing
 ```
 
-Test modules:
-- `test_stream.py`: RTSP stream reader, reconnection logic, error recovery, password masking
-- `test_stream_processor.py`: Frame skipping, stream iterator, statistics tracking, graceful stop
-- `test_detector.py`: Base detector & mock detector contract tests
-- `test_yolo_detector.py`: YOLO detector tests with mocked Ultralytics inference
-- `test_preprocessing.py`: Plate preprocessor tests (rescaling, CLAHE, binarization, edge cases)
-- `test_ocr.py`: Base OCR engine & mock OCR tests
-- `test_easyocr_engine.py`: EasyOCR tests with mocked reader instances
-- `test_recognizer.py`: Normalisation, confusion map correction, and Indian registration validation
-- `test_watchlist.py`: Watchlist matching, case insensitivity, and dynamic additions
-- `test_event_generator.py`: `ANPR_DETECTED` / `WATCHLIST_MATCH` event construction & `vehicle_id` support
-- `test_duplicate_suppression.py`: Thread-safe duplicate suppression, window expiry, and camera isolation
-- `test_integration_interface.py`: Public backend ingestion helper (`process_frame_to_events`) and serialization
-- `test_config.py`: Configuration validation rules and boundary checking
-- `test_pipeline.py`: End-to-end pipeline orchestration, multi-plate processing, error isolation
-- `test_robustness.py`: 10-area robustness validation (blurry, dark, angled, noisy, multi-plate, etc.)
-- `test_benchmark.py`: Benchmarking latency, FPS computation, and report serialization
-
 ---
 
-## 12. Known Limitations
+## 9. Known Limitations
 
 - **Extreme Angles (> 45°):** Highly skewed plates may experience lower OCR accuracy without 4-point perspective rectification.
-- **Heavy Motion Blur:** Preprocessing enhances edge contrast, but severely smeared characters cannot be reconstructed without specialized deblurring neural networks.
-- **CPU vs GPU:** On CPU, EasyOCR inference averages ~150–300 ms/crop; on CUDA GPU, latency drops to ~15–35 ms/crop.
+- **Heavy Motion Blur:** Bilateral and CLAHE filtering improves contrast, but severely smeared characters cannot be reconstructed without deep deblurring neural networks.
+- **Hardware Latency:** On CPU, EasyOCR inference averages ~150–300 ms/crop; CUDA GPU inference reduces latency to ~15–35 ms/crop.
 - **Decorative Fonts:** Non-standard or embossed typography on non-HSRP plates may require OCR fine-tuning.

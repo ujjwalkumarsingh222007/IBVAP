@@ -1,244 +1,244 @@
 """
 IBVAP - Member 2 ANPR Module - recognizer.py
 
-Plate recognition, text normalisation, and Indian vehicle registration validation.
+Normalises raw OCR output, validates Indian registration formats, corrects
+common character confusion, and builds a RecognitionResult.
 """
 
 from __future__ import annotations
 
 import logging
 import re
-from typing import Optional, Tuple
+from typing import Optional, Set, Tuple
 
 from .schemas import OCRResult, RecognitionResult
 
 logger = logging.getLogger(__name__)
 
-# Character substitutions based on likely confusion in specific positions
-_ALPHA_CORRECTIONS: dict[str, str] = {
-    "0": "O",
-    "1": "I",
-    "2": "Z",
-    "5": "S",
-    "8": "B",
-    "6": "G",
+# Official 2-letter State & Union Territory codes of India
+INDIAN_STATE_CODES: Set[str] = {
+    "AN", "AP", "AR", "AS", "BR", "CG", "CH", "DD", "DL", "DN",
+    "GA", "GJ", "HP", "HR", "JH", "JK", "KA", "KL", "LA", "LD",
+    "MH", "ML", "MN", "MP", "MZ", "NL", "OD", "PB", "PY", "RJ",
+    "SK", "TN", "TR", "TS", "UK", "UP", "WB",
 }
 
-_DIGIT_CORRECTIONS: dict[str, str] = {
-    "O": "0",
-    "o": "0",
-    "I": "1",
-    "i": "1",
-    "l": "1",
-    "Z": "2",
-    "z": "2",
-    "S": "5",
-    "s": "5",
-    "B": "8",
-    "b": "8",
-    "G": "6",
-    "g": "6",
-}
+# Standard patterns for Indian registrations:
+# 1. Standard: State (2 letters) + District (2 digits) + Series (0-3 letters) + Number (4 digits)
+_STD_INDIAN_PATTERN = re.compile(r"^[A-Z]{2}[0-9]{1,2}[A-Z]{0,3}[0-9]{4}$")
 
-# Recognized Indian State/UT Codes
-INDIAN_STATE_CODES = {
-    "AN", "AP", "AR", "AS", "BR", "CH", "CG", "DD", "DN", "DL", "GA", "GJ",
-    "HR", "HP", "JK", "JH", "KA", "KL", "LA", "LD", "MP", "MH", "MN", "ML",
-    "MZ", "NL", "OD", "PB", "PY", "RJ", "SK", "TN", "TS", "TR", "UP", "UK",
-    "UA", "WB", "BH"  # BH = Bharat Series
-}
+# 2. Bharat (BH) Series: Year (2 digits) + BH + Number (4 digits) + Series (1-2 letters)
+_BH_SERIES_PATTERN = re.compile(r"^[0-9]{2}BH[0-9]{4}[A-Z]{1,2}$")
 
-# Regular expressions for Indian registration formats
-# Standard: State (2 letters) + RTO code (2 digits) + Series (1-3 letters) + Number (1-4 digits)
-_RE_STANDARD_PLATE = re.compile(r"^([A-Z]{2})([0-9]{2})([A-Z]{1,3})([0-9]{1,4})$")
-# Short / Old format (e.g. DL3C1234 or TN091234)
-_RE_SHORT_PLATE = re.compile(r"^([A-Z]{2})([0-9]{1,2})([A-Z]{0,2})([0-9]{1,4})$")
-# Bharat Series: Year (2 digits) + BH + 4 digits + 1-2 letters (e.g. 22BH1234AA)
-_RE_BH_PLATE = re.compile(r"^([0-9]{2})BH([0-9]{4})([A-Z]{1,2})$")
+# 3. Short / Legacy formats (e.g. DL 1C 1234 or TN 09 1234)
+_SHORT_INDIAN_PATTERN = re.compile(r"^[A-Z]{2}[0-9]{1,2}[A-Z]{0,2}[0-9]{1,4}$")
 
 
-def _strip_noise(text: str) -> str:
-    """Remove non-alphanumeric characters and convert to uppercase."""
-    return re.sub(r"[^A-Za-z0-9]", "", text).upper().strip()
+def validate_indian_plate(plate_text: str, strict: bool = False) -> Tuple[bool, str]:
+    """
+    Validate whether a normalised plate matches valid Indian registration formats.
+
+    Parameters
+    ----------
+    plate_text:
+        Normalised uppercase alphanumeric string (e.g. 'TN09AB1234', '22BH1234AA').
+    strict:
+        If True, requires strict state code matching and exact standard lengths.
+
+    Returns
+    -------
+    Tuple[bool, str]
+        (is_valid, validation_reason_or_description)
+    """
+    if not plate_text:
+        return False, "Empty plate string"
+
+    text = plate_text.strip().upper()
+
+    # Check Bharat (BH) Series first: YY BH #### XX
+    if _BH_SERIES_PATTERN.match(text):
+        return True, "Bharat (BH) Series"
+
+    # Check Standard Series: SS DD [SSS] ####
+    if _STD_INDIAN_PATTERN.match(text):
+        state_prefix = text[:2]
+        if state_prefix in INDIAN_STATE_CODES:
+            return True, f"Standard Indian Plate ({state_prefix})"
+        if strict:
+            return False, f"Invalid State/UT Code: {state_prefix}"
+        return True, f"Standard Format (Unverified State: {state_prefix})"
+
+    # Check Short/Legacy format
+    if _SHORT_INDIAN_PATTERN.match(text):
+        state_prefix = text[:2]
+        if state_prefix in INDIAN_STATE_CODES:
+            return True, f"Legacy/Short Format ({state_prefix})"
+        if strict:
+            return False, f"Invalid State/UT Code: {state_prefix}"
+        return True, "Legacy/Short Format"
+
+    return False, "Does not match any recognized Indian plate format"
+
+
+# Context-dependent OCR character confusion substitutions
+_TO_DIGIT = {"O": "0", "I": "1", "Z": "2", "S": "5", "B": "8", "G": "6"}
+_TO_ALPHA = {"0": "O", "1": "I", "2": "Z", "5": "S", "8": "B", "6": "G"}
 
 
 def _apply_confusion_map(text: str) -> str:
     """
-    Position-aware character correction for standard Indian number plates.
+    Apply position-aware character confusion heuristics for Indian license plates.
     """
     if len(text) < 6:
         return text
 
-    # Check if Bharat Series (Starts with 2 digits followed by BH)
-    if len(text) >= 8 and (text[2:4] == "BH" or text[:2].isdigit()):
-        # Year digits
-        yr = "".join(_DIGIT_CORRECTIONS.get(c, c) for c in text[:2])
-        bh = "BH"
-        # 4 numeric digits
-        num_part = "".join(_DIGIT_CORRECTIONS.get(c, c) for c in text[4:8])
-        series_part = "".join(_ALPHA_CORRECTIONS.get(c, c) for c in text[8:])
-        return yr + bh + num_part + series_part
+    chars = list(text)
 
-    # Standard state plate (XX 00 XX 0000)
-    state = "".join(_ALPHA_CORRECTIONS.get(c, c) for c in text[0:2])
-    dist = "".join(_DIGIT_CORRECTIONS.get(c, c) for c in text[2:4])
-    
-    # Rest of the plate
-    remaining = text[4:]
-    if not remaining:
-        return state + dist
+    # Bharat (BH) Series: YY BH #### XX
+    if len(text) in (9, 10) and (text[2:4] == "BH" or (text[2] in "8B" and text[3] == "H")):
+        chars[0] = _TO_DIGIT.get(chars[0], chars[0])
+        chars[1] = _TO_DIGIT.get(chars[1], chars[1])
+        chars[2] = "B"
+        chars[3] = "H"
+        for i in range(4, 8):
+            chars[i] = _TO_DIGIT.get(chars[i], chars[i])
+        for i in range(8, len(chars)):
+            chars[i] = _TO_ALPHA.get(chars[i], chars[i])
+        return "".join(chars)
 
-    # For standard Indian plates, the trailing registration number is typically up to 4 digits.
-    # When remaining length is standard, apply position-specific mapping directly:
-    if len(remaining) == 6:
-        # e.g. AB1234 -> 2 letters series, 4 digits
-        series = "".join(_ALPHA_CORRECTIONS.get(c, c) for c in remaining[:2])
-        number = "".join(_DIGIT_CORRECTIONS.get(c, c) for c in remaining[2:])
-        return state + dist + series + number
-    elif len(remaining) == 5:
-        # e.g. A1234 -> 1 letter series, 4 digits
-        series = "".join(_ALPHA_CORRECTIONS.get(c, c) for c in remaining[:1])
-        number = "".join(_DIGIT_CORRECTIONS.get(c, c) for c in remaining[1:])
-        return state + dist + series + number
-    elif len(remaining) == 7:
-        # e.g. CAM1234 -> 3 letters series, 4 digits
-        series = "".join(_ALPHA_CORRECTIONS.get(c, c) for c in remaining[:3])
-        number = "".join(_DIGIT_CORRECTIONS.get(c, c) for c in remaining[3:])
-        return state + dist + series + number
-    elif len(remaining) == 4:
-        # e.g. 1234 (no series) or A123 (1 letter series + 3 digits)
-        if remaining[0].isalpha():
-            series = "".join(_ALPHA_CORRECTIONS.get(c, c) for c in remaining[:1])
-            number = "".join(_DIGIT_CORRECTIONS.get(c, c) for c in remaining[1:])
-        else:
-            series = ""
-            number = "".join(_DIGIT_CORRECTIONS.get(c, c) for c in remaining)
-        return state + dist + series + number
+    # Standard Format: State(2) + District(2) + [Series + Number]
+    # Pos 0, 1: State code letters
+    chars[0] = _TO_ALPHA.get(chars[0], chars[0])
+    chars[1] = _TO_ALPHA.get(chars[1], chars[1])
 
-    # Fallback for non-standard lengths
-    letters = []
-    digits = []
-    found_digit = False
-    for ch in remaining:
-        if ch.isdigit() or found_digit:
-            found_digit = True
-            digits.append(_DIGIT_CORRECTIONS.get(ch, ch))
-        else:
-            letters.append(_ALPHA_CORRECTIONS.get(ch, ch))
+    # Pos 2, 3: District digits
+    if len(chars) >= 4:
+        chars[2] = _TO_DIGIT.get(chars[2], chars[2])
+        chars[3] = _TO_DIGIT.get(chars[3], chars[3])
 
-    series = "".join(letters)
-    number = "".join(digits)
+    # Suffix evaluation (Positions 4+)
+    remaining = len(chars) - 4
+    if remaining == 6:  # e.g. AB1234 -> 2 letters + 4 digits
+        chars[4] = _TO_ALPHA.get(chars[4], chars[4])
+        chars[5] = _TO_ALPHA.get(chars[5], chars[5])
+        for i in range(6, 10):
+            chars[i] = _TO_DIGIT.get(chars[i], chars[i])
+    elif remaining == 5:  # e.g. A1234 -> 1 letter + 4 digits
+        chars[4] = _TO_ALPHA.get(chars[4], chars[4])
+        for i in range(5, 9):
+            chars[i] = _TO_DIGIT.get(chars[i], chars[i])
+    elif remaining == 4:  # e.g. 1234 -> 4 digits
+        for i in range(4, 8):
+            chars[i] = _TO_DIGIT.get(chars[i], chars[i])
+    elif remaining == 7:  # e.g. ABC1234 -> 3 letters + 4 digits
+        chars[4] = _TO_ALPHA.get(chars[4], chars[4])
+        chars[5] = _TO_ALPHA.get(chars[5], chars[5])
+        chars[6] = _TO_ALPHA.get(chars[6], chars[6])
+        for i in range(7, 11):
+            chars[i] = _TO_DIGIT.get(chars[i], chars[i])
 
-    return state + dist + series + number
+    return "".join(chars)
 
 
-def normalise_plate(raw_text: str) -> tuple[str, bool]:
+def normalise_plate(raw_text: str, country: str = "IN") -> Tuple[str, bool]:
     """
-    Normalise a raw OCR plate string into canonical registration form.
+    Clean and standardise raw OCR text for number plates.
 
     Returns
     -------
-    (normalised_text, was_normalised)
+    Tuple[str, bool]
+        (normalised_plate_text, was_modified)
     """
-    if not raw_text or not raw_text.strip():
+    if not raw_text:
         return "", False
 
-    cleaned = _strip_noise(raw_text)
-    corrected = _apply_confusion_map(cleaned)
-    was_normalised = (corrected != raw_text.upper())
+    original = raw_text.strip()
+    cleaned = re.sub(r"[^A-Za-z0-9]", "", raw_text)
+    cleaned = cleaned.upper()
 
-    logger.debug("normalise_plate: %r -> %r (modified=%s)", raw_text, corrected, was_normalised)
-    return corrected, was_normalised
+    if not cleaned:
+        return "", False
 
+    if country == "IN":
+        cleaned = _apply_confusion_map(cleaned)
 
-def validate_indian_plate(plate_number: str) -> Tuple[bool, Optional[str]]:
-    """
-    Validate whether a normalised plate number matches recognised Indian patterns.
-
-    Returns
-    -------
-    (is_valid, pattern_or_reason)
-    """
-    if not plate_number:
-        return False, "Empty plate number"
-
-    # Check Bharat Series
-    if _RE_BH_PLATE.match(plate_number):
-        return True, "Bharat Series (BH)"
-
-    # Check Standard State Plate
-    match = _RE_STANDARD_PLATE.match(plate_number)
-    if match:
-        state_code = match.group(1)
-        if state_code in INDIAN_STATE_CODES:
-            return True, f"Standard Indian Plate ({state_code})"
-        return True, f"Standard Format (Unknown Prefix: {state_code})"
-
-    # Check Short/Legacy Format
-    match_short = _RE_SHORT_PLATE.match(plate_number)
-    if match_short:
-        state_code = match_short.group(1)
-        if state_code in INDIAN_STATE_CODES:
-            return True, f"Legacy/Short Format ({state_code})"
-
-    # Plausible alphanumeric plate if between 6 and 11 chars
-    if 6 <= len(plate_number) <= 11 and plate_number.isalnum():
-        return True, "General Alphanumeric Plate"
-
-    return False, "Unrecognized format or invalid length"
+    was_modified = (cleaned != original)
+    return cleaned, was_modified
 
 
 class PlateRecognizer:
-    """Converts an OCRResult into a validated RecognitionResult."""
+    """
+    Normalises, validates, and evaluates raw OCR output into structured RecognitionResults.
+    """
 
     def __init__(
         self,
-        min_ocr_confidence: float = 0.30,
-        min_plate_length: int = 4,
-        max_plate_length: int = 12,
+        min_ocr_confidence: Optional[float] = None,
+        min_confidence: Optional[float] = None,
+        min_plate_length: Optional[int] = None,
+        min_length: Optional[int] = None,
+        max_plate_length: Optional[int] = None,
+        max_length: Optional[int] = None,
+        country: str = "IN",
         strict_validation: bool = False,
+        strict: bool = False,
     ) -> None:
-        self._min_ocr_conf = min_ocr_confidence
-        self._min_len = min_plate_length
-        self._max_len = max_plate_length
-        self._strict_validation = strict_validation
+        if min_ocr_confidence is not None:
+            self.min_confidence = min_ocr_confidence
+        elif min_confidence is not None:
+            self.min_confidence = min_confidence
+        else:
+            self.min_confidence = 0.40
 
-    def recognise(self, ocr_result: OCRResult) -> Optional[RecognitionResult]:
-        """Normalise and validate an OCRResult."""
-        if ocr_result.confidence < self._min_ocr_conf:
-            logger.warning(
-                "OCR confidence %.2f below threshold %.2f -- rejecting",
+        self.min_length = min_plate_length if min_plate_length is not None else (min_length if min_length is not None else 4)
+        self.max_length = max_plate_length if max_plate_length is not None else (max_length if max_length is not None else 15)
+        self.country = country
+        self.strict = strict or strict_validation
+
+    def recognise(
+        self,
+        ocr_result: OCRResult,
+        strict: Optional[bool] = None,
+    ) -> Optional[RecognitionResult]:
+        """
+        Convert an OCRResult into a normalised RecognitionResult.
+        """
+        if ocr_result.confidence < self.min_confidence:
+            logger.debug(
+                "OCR confidence %.2f below threshold %.2f -- discarding",
                 ocr_result.confidence,
-                self._min_ocr_conf,
+                self.min_confidence,
             )
             return None
 
-        plate_number, normalised = normalise_plate(ocr_result.raw_text)
+        plate_number, was_norm = normalise_plate(ocr_result.raw_text, country=self.country)
 
-        if len(plate_number) < self._min_len:
-            logger.warning(
-                "Normalised plate %r too short (%d < %d) -- rejecting",
-                plate_number, len(plate_number), self._min_len,
+        if len(plate_number) < self.min_length or len(plate_number) > self.max_length:
+            logger.debug(
+                "Normalised plate '%s' length %d outside [%d, %d] -- discarding",
+                plate_number,
+                len(plate_number),
+                self.min_length,
+                self.max_length,
             )
             return None
 
-        if len(plate_number) > self._max_len:
-            logger.warning(
-                "Normalised plate %r too long (%d > %d) -- rejecting",
-                plate_number, len(plate_number), self._max_len,
-            )
-            return None
+        use_strict = self.strict if strict is None else strict
+        is_valid, reason = validate_indian_plate(plate_number, strict=use_strict)
 
-        is_valid, reason = validate_indian_plate(plate_number)
-        if not is_valid and self._strict_validation:
-            logger.warning("Plate %r failed validation: %s", plate_number, reason)
+        if use_strict and not is_valid:
+            logger.debug(
+                "Plate '%s' rejected by strict Indian plate validation: %s",
+                plate_number,
+                reason,
+            )
             return None
 
         return RecognitionResult(
             plate_number=plate_number,
             raw_text=ocr_result.raw_text,
             confidence=ocr_result.confidence,
-            normalised=normalised,
+            normalised=was_norm,
             validation_passed=is_valid,
             validation_reason=reason,
         )

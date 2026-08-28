@@ -17,7 +17,7 @@ from typing import List, Optional
 @dataclass
 class ANPRConfig:
     """
-    Runtime configuration for the ANPR pipeline and RTSP stream processing.
+    Runtime configuration for the ANPR pipeline, validation runner, and RTSP stream processing.
 
     All values have safe defaults so the module works out-of-the-box
     without any environment setup.
@@ -107,7 +107,7 @@ class ANPRConfig:
     reconnect_attempts: int = field(
         default_factory=lambda: int(os.getenv("ANPR_RECONNECT_ATTEMPTS", "3"))
     )
-    """Maximum consecutive reconnection attempts on stream drop."""
+    """Maximum consecutive stream reconnect attempts."""
 
     reconnect_delay_sec: float = field(
         default_factory=lambda: float(os.getenv("ANPR_RECONNECT_DELAY_SEC", "2.0"))
@@ -119,11 +119,21 @@ class ANPRConfig:
     )
     """Stream connection timeout in seconds."""
 
-    # --- Recognition / normalisation ---
+    # --- Recognition / Validation (Phase 6) ---
     plate_country: str = field(
         default_factory=lambda: os.getenv("ANPR_PLATE_COUNTRY", "IN")
     )
     """Country code used to select normalisation rules ('IN' = India)."""
+
+    strict_plate_validation: bool = field(
+        default_factory=lambda: os.getenv("ANPR_STRICT_VALIDATION", "false").lower() in ("true", "1", "yes")
+    )
+    """Whether to enforce strict state code and structural format checks."""
+
+    min_plate_confidence: float = field(
+        default_factory=lambda: float(os.getenv("ANPR_MIN_PLATE_CONF", "0.40"))
+    )
+    """Overall minimum confidence threshold for plate emission."""
 
     # --- Watchlist ---
     watchlist_backend: str = field(
@@ -147,6 +157,9 @@ class ANPRConfig:
 
         if not 0.0 <= self.ocr_confidence_threshold <= 1.0:
             raise ValueError(f"ocr_confidence_threshold ({self.ocr_confidence_threshold}) must be in [0, 1]")
+
+        if not 0.0 <= self.min_plate_confidence <= 1.0:
+            raise ValueError(f"min_plate_confidence ({self.min_plate_confidence}) must be in [0, 1]")
 
         if self.preprocess_target_width < 50 or self.preprocess_target_width > 2000:
             raise ValueError(f"preprocess_target_width ({self.preprocess_target_width}) must be between 50 and 2000")
