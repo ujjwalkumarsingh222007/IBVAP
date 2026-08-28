@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from pydantic import BaseModel, Field, field_validator, ConfigDict, AliasChoices
 
 SUPPORTED_EVENT_TYPES = {
@@ -53,3 +53,12 @@ class EventResponse(EventBase):
     )
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+
+class EventPaginatedResponse(BaseModel):
+    """Paginated list response for events."""
+
+    items: List[EventResponse]
+    total: int = Field(..., description="Total matching items count")
+    skip: int = Field(..., description="Number of items skipped")
+    limit: int = Field(..., description="Maximum items requested")

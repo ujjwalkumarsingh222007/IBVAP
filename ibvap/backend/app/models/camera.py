@@ -17,5 +17,5 @@ class Camera(Base):
     name = Column(String(100), nullable=False)
     rtsp_url = Column(String(255), nullable=False)
     location = Column(String(150), nullable=True)
-    status = Column(String(20), nullable=False, default="ACTIVE")
+    status = Column(String(20), nullable=False, default="ACTIVE", index=True)
     created_at = Column(DateTime, default=utc_now)

@@ -1,4 +1,4 @@
-# IBVAP — Member 3 Backend (Phase 1)
+# IBVAP — Member 3 Backend (Phase 2)
 
 This is the **FastAPI Backend** component for **IBVAP (Intelligent Border Video Analytics Platform)** maintained by **Member 3**.
 
@@ -41,34 +41,38 @@ backend/
 │   ├── config.py            # Environment variable configuration
 │   ├── database.py          # SQLAlchemy engine, session maker, get_db dependency
 │   │
-│   ├── models/              # SQLAlchemy database models
+│   ├── models/              # SQLAlchemy database models with composite indexes
 │   │   ├── __init__.py
-│   │   ├── event.py         # Event table model (JSON metadata support)
+│   │   ├── event.py         # Event table model & Alert relationship
 │   │   ├── camera.py        # Camera table model
-│   │   ├── alert.py         # Alert table model
+│   │   ├── alert.py         # Alert table model & Event relationship
 │   │   └── watchlist.py     # Watchlist table model
 │   │
 │   ├── schemas/             # Pydantic data schemas & validators
 │   │   ├── __init__.py
-│   │   ├── event.py         # Common Event contract validation
-│   │   ├── camera.py        # Camera schemas
-│   │   ├── alert.py         # Alert schemas
-│   │   └── watchlist.py     # Watchlist schemas
+│   │   ├── event.py         # Event contract & EventPaginatedResponse
+│   │   ├── camera.py        # Camera CRUD schemas & pagination
+│   │   ├── alert.py         # Alert lifecycle schemas & pagination
+│   │   └── watchlist.py     # Watchlist CRUD schemas & pagination
 │   │
 │   └── routes/              # REST API endpoint handlers
 │       ├── __init__.py
-│       ├── events.py        # POST /api/v1/events, GET /api/v1/events
-│       ├── cameras.py       # GET /api/v1/cameras
-│       ├── alerts.py        # GET /api/v1/alerts
-│       ├── watchlist.py     # GET /api/v1/watchlist
-│       └── detections.py    # GET /api/v1/detections
+│       ├── events.py        # Ingestion, filtering, GET /{id}, alert auto-gen
+│       ├── cameras.py       # Full Camera CRUD
+│       ├── alerts.py        # Alert list & acknowledge/resolve state machine
+│       ├── watchlist.py     # Full Watchlist CRUD
+│       └── detections.py    # Detection event queries & filtering
 │
 ├── tests/                   # Pytest automated test suite
-│   ├── conftest.py
-│   ├── test_health.py
-│   ├── test_events.py
-│   └── test_endpoints.py
+│   ├── conftest.py          # Isolated SQLite test fixture (StaticPool)
+│   ├── test_health.py       # Health check tests
+│   ├── test_events.py       # Event validation, filtering & detail tests
+│   ├── test_cameras.py      # Camera CRUD & duplicate validation tests
+│   ├── test_alerts.py       # Alert state transition lifecycle tests
+│   ├── test_watchlist.py    # Watchlist CRUD & duplicate plate tests
+│   └── test_endpoints.py    # Secondary endpoint pagination tests
 │
+├── .gitignore               # Python venv and pytest cache isolation
 ├── requirements.txt         # Backend Python dependencies
 ├── .env.example             # Environment variable configuration template
 └── README.md                # Backend documentation
@@ -76,96 +80,36 @@ backend/
 
 ---
 
-## Prerequisites & Installation
+## Complete API Endpoint Reference
 
-### 1. Requirements
-* Python 3.10+
-* PostgreSQL (or SQLite for local testing)
+### Health Check
+* `GET /health` — Service status check (`{"status": "ok"}`)
 
-### 2. Create Virtual Environment
+### Events API
+* `POST /api/v1/events` — Ingest AI event matching common contract (auto-creates Alert for `INTRUSION_DETECTED`, `WATCHLIST_MATCH`, `SUSPICIOUS_ACTIVITY`).
+* `GET /api/v1/events` — Query events with filters: `camera_id`, `event_type`, `start_time`, `end_time`, `skip`, `limit`. Returns `EventPaginatedResponse`.
+* `GET /api/v1/events/{event_id}` — Retrieve single event by integer ID.
 
-```bash
-cd backend
+### Detections API
+* `GET /api/v1/detections` — Query detection events (`OBJECT_DETECTED`, `VEHICLE_DETECTED`, `PERSON_DETECTED`, `ANPR_DETECTED`, `INTRUSION_DETECTED`, `SUSPICIOUS_ACTIVITY`).
 
-# Create virtual environment
-python -m venv venv
+### Camera CRUD API
+* `GET /api/v1/cameras` — List cameras (`status`, `skip`, `limit`).
+* `POST /api/v1/cameras` — Create camera (returns 409 Conflict if `camera_id` exists).
+* `GET /api/v1/cameras/{camera_id}` — Get single camera detail by camera_id string.
+* `PUT /api/v1/cameras/{camera_id}` — Update camera details (`name`, `rtsp_url`, `location`, `status`).
+* `DELETE /api/v1/cameras/{camera_id}` — Delete camera by camera_id string.
 
-# Activate virtual environment
-# On Windows (PowerShell):
-venv\Scripts\Activate.ps1
-# On Windows (CMD):
-venv\Scripts\activate.bat
-# On Linux / macOS:
-source venv/bin/activate
-```
+### Alert Management API
+* `GET /api/v1/alerts` — List alerts (`status`, `severity`, `skip`, `limit`).
+* `POST /api/v1/alerts/{alert_id}/acknowledge` — Transition status: `NEW`/`OPEN` → `ACKNOWLEDGED`. Rejects if already `RESOLVED` (400 Bad Request).
+* `POST /api/v1/alerts/{alert_id}/resolve` — Transition status: `NEW`/`OPEN`/`ACKNOWLEDGED` → `RESOLVED`.
 
-### 3. Install Dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
----
-
-## Configuration
-
-### Environment Variables (`.env`)
-Copy `.env.example` to `.env` inside `backend/`:
-
-```bash
-cp .env.example .env
-```
-
-Default `.env` contents:
-```env
-DATABASE_URL=postgresql://postgres:password@localhost:5432/ibvap
-APP_NAME=IBVAP Backend
-APP_VERSION=1.0.0
-DEBUG=True
-```
-
-### PostgreSQL Setup
-1. Ensure PostgreSQL service is running on `localhost:5432`.
-2. Create the target database:
-   ```sql
-   CREATE DATABASE ibvap;
-   ```
-3. Update `DATABASE_URL` in `.env` with your actual database credentials:
-   ```env
-   DATABASE_URL=postgresql://username:your_password@localhost:5432/ibvap
-   ```
-
----
-
-## Running the Server
-
-Start the Uvicorn development server:
-
-```bash
-uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
-```
-
-The API server will be available at `http://127.0.0.1:8000`.
-
-### API Documentation & Interactive Swagger UI
-Once running, view the automatically generated interactive documentation:
-* **Swagger UI**: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
-* **ReDoc**: [http://127.0.0.1:8000/redoc](http://127.0.0.1:8000/redoc)
-* **OpenAPI Schema**: [http://127.0.0.1:8000/openapi.json](http://127.0.0.1:8000/openapi.json)
-
----
-
-## API Endpoints
-
-| Method | Endpoint | Description |
-| :--- | :--- | :--- |
-| `GET` | `/health` | Backend service health check (`{"status": "ok"}`) |
-| `POST` | `/api/v1/events` | Ingest and validate AI events |
-| `GET` | `/api/v1/events` | Retrieve list of ingested events |
-| `GET` | `/api/v1/cameras` | Retrieve list of registered cameras |
-| `GET` | `/api/v1/alerts` | Retrieve security alerts |
-| `GET` | `/api/v1/detections` | Retrieve detection events |
-| `GET` | `/api/v1/watchlist` | Retrieve license plate watchlist |
+### Watchlist CRUD API
+* `GET /api/v1/watchlist` — List watchlist entries (`status`, `skip`, `limit`).
+* `POST /api/v1/watchlist` — Add plate number (returns 409 Conflict if plate exists).
+* `PUT /api/v1/watchlist/{id}` — Update entry (`description`, `status`).
+* `DELETE /api/v1/watchlist/{id}` — Remove plate entry by ID.
 
 ---
 
@@ -192,38 +136,47 @@ Member 1 (Computer Vision) and Member 2 (ANPR) send events using this standardiz
 * `VEHICLE_DETECTED`
 * `PERSON_DETECTED`
 * `ANPR_DETECTED`
-* `INTRUSION_DETECTED`
-* `WATCHLIST_MATCH`
-* `SUSPICIOUS_ACTIVITY`
+* `INTRUSION_DETECTED` (Auto-creates Alert: `HIGH` severity)
+* `WATCHLIST_MATCH` (Auto-creates Alert: `CRITICAL` severity)
+* `SUSPICIOUS_ACTIVITY` (Auto-creates Alert: `MEDIUM` severity)
+
+---
+
+## Running the Server
+
+Start Uvicorn server:
+
+```bash
+cd backend
+venv\Scripts\Activate.ps1
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+* **Swagger UI**: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+* **ReDoc**: [http://127.0.0.1:8000/redoc](http://127.0.0.1:8000/redoc)
+* **OpenAPI Schema**: [http://127.0.0.1:8000/openapi.json](http://127.0.0.1:8000/openapi.json)
 
 ---
 
 ## Running Automated Tests
 
-Run the backend test suite using `pytest`:
+Run pytest suite:
 
 ```bash
-# From backend directory
-pytest
-
-# Verbose output
-pytest -v
+cd backend
+.\venv\Scripts\python.exe -m pytest tests/ -v
 ```
 
-The test suite runs using an in-memory SQLite database (`sqlite:///:memory:`) so tests execute independently of external PostgreSQL availability.
+All tests execute in an isolated in-memory SQLite database (`sqlite:///:memory:`) using `StaticPool`.
 
 ---
 
 ## Integration Guidelines
 
-### Member 1 (Computer Vision) & Member 2 (ANPR)
-Send HTTP `POST` requests to `http://localhost:8000/api/v1/events` containing valid JSON payload matching the Common Event Contract. The backend validates and persists event metadata without requiring internal Python code dependencies on YOLO, OpenCV, or OCR.
+### Member 1 & Member 2 AI Integration
+Send HTTP `POST` requests to `http://localhost:8000/api/v1/events`. The backend ingests the event and auto-creates alerts for high-priority event types without requiring internal Python module imports.
 
-### Member 4 (React Frontend)
-Consume REST APIs using standard HTTP clients (e.g. `axios` or `fetch`):
-* `GET http://localhost:8000/api/v1/events`
-* `GET http://localhost:8000/api/v1/cameras`
-* `GET http://localhost:8000/api/v1/alerts`
-* `GET http://localhost:8000/api/v1/detections`
-* `GET http://localhost:8000/api/v1/watchlist`
-* `GET http://localhost:8000/health`
+### Member 4 React Frontend Integration
+Consume REST APIs using standard HTTP clients (`fetch` / `axios`):
+- All endpoints support structured pagination responses: `{"items": [...], "total": N, "skip": 0, "limit": 20}`.
+- CORS middleware is enabled (`allow_origins=["*"]`) for local frontend development.

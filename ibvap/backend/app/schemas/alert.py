@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 from pydantic import BaseModel, Field, ConfigDict
 
 
@@ -10,7 +10,7 @@ class AlertBase(BaseModel):
     alert_type: str = Field(..., description="Alert classification")
     message: str = Field(..., description="Alert detail message")
     severity: str = Field("MEDIUM", description="Alert severity level (LOW, MEDIUM, HIGH, CRITICAL)")
-    status: str = Field("NEW", description="Alert status (NEW, ACKNOWLEDGED, RESOLVED)")
+    status: str = Field("NEW", description="Alert status (NEW, OPEN, ACKNOWLEDGED, RESOLVED)")
 
 
 class AlertCreate(AlertBase):
@@ -26,3 +26,12 @@ class AlertResponse(AlertBase):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class AlertPaginatedResponse(BaseModel):
+    """Paginated list response for security alerts."""
+
+    items: List[AlertResponse]
+    total: int
+    skip: int
+    limit: int
