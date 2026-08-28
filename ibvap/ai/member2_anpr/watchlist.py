@@ -62,7 +62,8 @@ class BaseWatchlistMatcher(abc.ABC):
     def _validate_plate(self, plate_number: Optional[str]) -> str:
         if not plate_number or not plate_number.strip():
             raise ValueError("plate_number must be a non-empty string")
-        return plate_number.strip().upper()
+        import re
+        return re.sub(r"\s+", "", plate_number.strip().upper())
 
 
 class InMemoryWatchlistMatcher(BaseWatchlistMatcher):
@@ -76,9 +77,14 @@ class InMemoryWatchlistMatcher(BaseWatchlistMatcher):
         Defaults to DEFAULT_WATCHLIST if None.
     """
 
-    def __init__(self, watchlist: Optional[WatchlistStore] = None) -> None:
+    def __init__(
+        self,
+        watchlist: Optional[WatchlistStore] = None,
+        custom_watchlist: Optional[WatchlistStore] = None,
+    ) -> None:
+        wl = custom_watchlist if custom_watchlist is not None else watchlist
         self._store: WatchlistStore = (
-            dict(watchlist) if watchlist is not None else dict(DEFAULT_WATCHLIST)
+            dict(wl) if wl is not None else dict(DEFAULT_WATCHLIST)
         )
         logger.debug(
             "InMemoryWatchlistMatcher initialised with %d entries", len(self._store)
@@ -103,12 +109,12 @@ class InMemoryWatchlistMatcher(BaseWatchlistMatcher):
 
     def add_entry(self, plate_number: str, status: str, reason: str = "") -> None:
         """Dynamically add an entry (useful for integration tests)."""
-        key = plate_number.strip().upper()
+        key = self._validate_plate(plate_number)
         self._store[key] = {"status": status, "reason": reason}
 
     def remove_entry(self, plate_number: str) -> bool:
         """Remove an entry. Returns True if the entry existed."""
-        key = plate_number.strip().upper()
+        key = self._validate_plate(plate_number)
         existed = key in self._store
         self._store.pop(key, None)
         return existed

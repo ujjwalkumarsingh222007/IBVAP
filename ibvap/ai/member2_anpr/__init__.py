@@ -156,5 +156,5 @@ __all__ = [
     "EventType",
 ]
 
-__version__ = "0.6.0"
-__author__ = "Member 2 - ANPR Developer"
+__version__ = "0.7.0"
+__author__ = "Member 2 - ANPR Developer (SIH 2026)"

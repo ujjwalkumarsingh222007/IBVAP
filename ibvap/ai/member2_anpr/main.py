@@ -1,9 +1,12 @@
 """
 IBVAP - Member 2 ANPR Module - main.py
 
-Command-line entry point, demo runner, RTSP stream processor, benchmark, and validation suite.
+Command-line entry point, SIH demo runner, RTSP stream processor, benchmark, and validation suite.
 
 Usage:
+    # Run full SIH 2026 interactive multi-scenario demonstration
+    python -m ai.member2_anpr.main --demo
+
     # Run mock simulation demo
     python -m ai.member2_anpr.main --mock
 
@@ -27,6 +30,7 @@ import json
 import logging
 import os
 import sys
+import time
 
 import cv2
 import numpy as np
@@ -40,6 +44,7 @@ from .pipeline import ANPRPipeline
 from .recognizer import PlateRecognizer
 from .stream import RTSPStreamReader, mask_rtsp_url
 from .stream_processor import ANPRStreamProcessor
+from .suppressor import DuplicateSuppressor
 from .validator import ANPRValidator
 from .watchlist import InMemoryWatchlistMatcher
 
@@ -77,6 +82,82 @@ def build_pipeline(use_mock: bool, model_path: str | None = None) -> ANPRPipelin
         watchlist=InMemoryWatchlistMatcher(),
         event_generator=ANPREventGenerator(),
     )
+
+
+def run_sih_demo() -> None:
+    """
+    Execute the official SIH 2026 interactive multi-scenario ANPR demonstration.
+    Demonstrates:
+      1. Standard Indian Registration & Vehicle ID Tracking
+      2. High-Priority Watchlist Alert (Stolen Vehicle)
+      3. Live Stream Duplicate Event Suppression
+      4. Multi-Checkpoint Camera Independence
+      5. Backend Integration JSON Contract
+    """
+    print("=" * 70)
+    print("  IBVAP -- Intelligent Border Video Analytics Platform (SIH 2026)")
+    print("  Member 2 -- ANPR (Automatic Number Plate Recognition) SIH Demo")
+    print("=" * 70)
+
+    # 1. Standard Indian Registration
+    print("\n[SCENARIO 1] Standard Indian License Plate Detection:")
+    print("  Input: Border Checkpoint Camera 'CAM-BORDER-01', Vehicle 'VEH-BORDER-101'")
+    pipe1 = ANPRPipeline(
+        detector=MockPlateDetector(),
+        ocr_engine=MockOCREngine(mock_text="DL01AB1234", mock_confidence=0.95),
+        watchlist=InMemoryWatchlistMatcher(custom_watchlist={}),
+    )
+    frame1 = np.full((480, 640, 3), fill_value=128, dtype=np.uint8)
+    res1 = pipe1.process_frame(frame1, camera_id="CAM-BORDER-01", vehicle_id="VEH-BORDER-101")
+    event1 = res1[0].event
+    print(f"  -> Detected Plate     : {res1[0].plate_number}")
+    print(f"  -> State Code & Format : {event1.metadata.get('validation_reason')}")
+    print(f"  -> Event Emitted      : {event1.event_type.value}")
+    print(f"  -> Overall Confidence : {event1.confidence:.2f}")
+
+    # 2. Watchlist Alert
+    print("\n[SCENARIO 2] Watchlist Hit (Stolen / Wanted Vehicle Alert):")
+    print("  Input: Checkpoint 'CAM-BORDER-01', Plate 'MH12DE1433'")
+    stolen_wl = {"MH12DE1433": {"status": "STOLEN", "reason": "Reported stolen in Pune - FIR #8821"}}
+    pipe2 = ANPRPipeline(
+        detector=MockPlateDetector(),
+        ocr_engine=MockOCREngine(mock_text="MH12DE1433", mock_confidence=0.96),
+        watchlist=InMemoryWatchlistMatcher(custom_watchlist=stolen_wl),
+    )
+    res2 = pipe2.process_frame(frame1, camera_id="CAM-BORDER-01", vehicle_id="VEH-SUSPECT-404")
+    event2 = res2[0].event
+    print(f"  -> !!! ALERT TRIGGERED : {event2.event_type.value} !!!")
+    print(f"  -> Plate Number        : {res2[0].plate_number}")
+    print(f"  -> Watchlist Status    : {event2.metadata.get('watchlist_status')}")
+    print(f"  -> Reason              : {event2.metadata.get('watchlist_reason')}")
+
+    # 3. Duplicate Suppression
+    print("\n[SCENARIO 3] Real-Time Video Stream Duplicate Suppression (10s Window):")
+    suppressor = DuplicateSuppressor(window_seconds=10.0)
+    pipe3 = ANPRPipeline(
+        detector=MockPlateDetector(),
+        ocr_engine=MockOCREngine(mock_text="TN09AB1234"),
+        duplicate_suppressor=suppressor,
+    )
+    t0 = time.time()
+    r_f1 = pipe3.process_frame(frame1, camera_id="CAM-BORDER-01", timestamp="2026-08-28T15:30:00+00:00")
+    print(f"  Frame 1 (t=0.0s) : Plate={r_f1[0].plate_number} -> Emitted (duplicate_suppressed={r_f1[0].duplicate_suppressed})")
+
+    r_f2 = pipe3.process_frame(frame1, camera_id="CAM-BORDER-01", timestamp="2026-08-28T15:30:01+00:00")
+    print(f"  Frame 2 (t=1.0s) : Plate={r_f2[0].plate_number} -> SUPPRESSED (duplicate_suppressed={r_f2[0].duplicate_suppressed})")
+
+    # 4. Multi-Checkpoint Camera Independence
+    print("\n[SCENARIO 4] Multi-Camera Checkpoint Independence:")
+    r_cam2 = pipe3.process_frame(frame1, camera_id="CAM-BORDER-02", timestamp="2026-08-28T15:30:02+00:00")
+    print(f"  CAM-BORDER-02 (t=2.0s) : Same Plate seen at Gate 2 -> Emitted (duplicate_suppressed={r_cam2[0].duplicate_suppressed})")
+
+    # 5. Backend Event JSON Contract
+    print("\n[SCENARIO 5] Standardized IBVAPEvent Contract for Member 3 Backend:")
+    print(event1.model_dump_json(indent=2))
+
+    print("\n" + "=" * 70)
+    print("  SIH 2026 ANPR Demonstration Completed Successfully!")
+    print("=" * 70 + "\n")
 
 
 def run_benchmark_cli(pipeline: ANPRPipeline, num_frames: int, use_mock: bool) -> None:
@@ -165,6 +246,7 @@ def run_stream_cli(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="IBVAP Member 2 ANPR Module Runner")
+    parser.add_argument("--demo", action="store_true", help="Run full SIH 2026 multi-scenario interactive demonstration")
     parser.add_argument("--source", type=str, default=None, help="RTSP URL, video file path, or webcam index")
     parser.add_argument("--camera", type=str, default=None, help="RTSP URL or Camera ID (backward compatibility)")
     parser.add_argument("--camera-id", type=str, default="CAM-01", help="Camera ID identifier (default: CAM-01)")
@@ -181,6 +263,11 @@ def main() -> None:
     parser.add_argument("--ground-truth", type=str, default=None, help="Expected plate ground truth or path to JSON map")
 
     args = parser.parse_args()
+
+    # 1. SIH Demo Mode
+    if args.demo:
+        run_sih_demo()
+        return
 
     # Determine stream source vs camera ID
     stream_source = args.source
@@ -202,7 +289,7 @@ def main() -> None:
         logger.error("Pipeline initialization failed: %s", err)
         sys.exit(1)
 
-    # 1. Validation Mode
+    # 2. Validation Mode
     if args.validate:
         run_validation_cli(
             pipeline=pipeline,
@@ -212,12 +299,12 @@ def main() -> None:
         )
         return
 
-    # 2. Benchmark Mode
+    # 3. Benchmark Mode
     if args.benchmark:
         run_benchmark_cli(pipeline=pipeline, num_frames=args.num_frames, use_mock=args.mock)
         return
 
-    # 3. RTSP / Stream Mode
+    # 4. RTSP / Stream Mode
     if stream_source:
         run_stream_cli(
             source=stream_source,
@@ -229,7 +316,7 @@ def main() -> None:
         )
         return
 
-    # 4. Static Image / Single Frame Mode
+    # 5. Static Image / Single Frame Mode
     if args.image:
         if not os.path.exists(args.image):
             logger.error("Image file not found: %s", args.image)

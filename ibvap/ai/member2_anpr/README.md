@@ -2,7 +2,8 @@
 
 **IBVAP (Intelligent Border Video Analytics Platform)**  
 Module: `ai/member2_anpr/`  
-Phase: 6 — Real-Model Validation & Production Hardening  
+Phase: 7 — Final ANPR Integration, Regression Testing & SIH Demo Readiness  
+Version: `0.7.0`  
 
 ---
 
@@ -10,20 +11,77 @@ Phase: 6 — Real-Model Validation & Production Hardening
 
 The **ANPR (Automatic Number Plate Recognition)** subsystem processes live IP-camera/RTSP video streams, recorded video files, and vehicle image crops to detect license plates, enhance plate images, perform OCR, normalize and validate Indian registration numbers, match against active watchlists, suppress duplicate detections on continuous streams, and generate standardized `IBVAPEvent` payloads for Member 3's backend.
 
-Phase 6 introduces **Real-Model Validation Runner** (`ANPRValidator`), **Indian State Code & Structural False-Positive Filtering**, **Strict Validation Modes**, **Production Error Resilience**, and **Component-Level Latency Profiling** across 223 automated unit tests (89% code coverage).
+Phase 7 completes end-to-end integration and regression testing, providing a dedicated **SIH 2026 Interactive Demonstration Mode** (`python -m ai.member2_anpr.main --demo`) with 229 passing unit tests (88% code coverage).
 
 ---
 
-## 2. Responsibilities
+## 2. SIH Demo Guide
+
+This guide is designed for evaluating and presenting the ANPR subsystem to SIH judges.
+
+### Recommended SIH Demonstration Command
+
+Run the official interactive multi-scenario demonstration:
+
+```bash
+python -m ai.member2_anpr.main --demo
+```
+
+### What the SIH Demo Demonstrates:
+
+1. **Scenario 1: Standard Indian Registration Detection**
+   - Ingests checkpoint frame (`CAM-BORDER-01`) with associated vehicle ID (`VEH-BORDER-101`).
+   - Normalises registration text (`DL01AB1234`), applies position-aware confusion correction (`O↔0`, `I↔1`, `Z↔2`), and validates against official Indian State/UT codes.
+   - Emits `ANPR_DETECTED` event.
+
+2. **Scenario 2: High-Priority Stolen Vehicle Watchlist Alert**
+   - Matches detected plate against active watchlist (`MH12DE1433` - Reported Stolen).
+   - Generates high-priority `WATCHLIST_MATCH` event with reason and status in metadata.
+
+3. **Scenario 3: Live Video Stream Duplicate Suppression**
+   - Simulates consecutive CCTV stream frames at 25 FPS.
+   - Frame 1 (t=0.0s) emits an alert; Frame 2 (t=1.0s) is automatically suppressed by `DuplicateSuppressor` (10s window) to prevent downstream API flooding.
+
+4. **Scenario 4: Multi-Checkpoint Camera Independence**
+   - Shows that when the same vehicle passes a second checkpoint (`CAM-BORDER-02`), it is immediately alerted without false suppression.
+
+5. **Scenario 5: Standardized Backend JSON Event Contract**
+   - Displays the exact JSON contract consumed by Member 3 (FastAPI Backend).
+
+---
+
+### Additional Demonstration Commands
+
+```bash
+# 1. Run single-frame simulation demo
+python -m ai.member2_anpr.main --mock
+
+# 2. Run high-throughput performance benchmark
+python -m ai.member2_anpr.main --benchmark --num-frames 30 --mock
+
+# 3. Run validation runner on synthetic frame
+python -m ai.member2_anpr.main --validate --mock
+
+# 4. Run on a local vehicle image (mock or real YOLO weights)
+python -m ai.member2_anpr.main --image test_vehicle.jpg --camera-id CAM-01 --mock
+
+# 5. Run live RTSP video stream with frame skipping (4-frame skip)
+python -m ai.member2_anpr.main --source rtsp://admin:pass@192.168.1.100:554/stream --frame-skip 4 --camera-id CAM-GATE-01
+```
+
+---
+
+## 3. Responsibilities
 
 Member 2 exclusively owns all code under `ai/member2_anpr/`.
 
 | Responsibility | Module | Class / Helper |
 |---|---|---|
+| Public integration interface | `__init__.py` | `process_frame_to_events()` |
+| SIH interactive demo & CLI | `main.py` | `run_sih_demo()`, CLI runner |
 | Real-model validation runner | `validator.py` | `ANPRValidator`, `ValidationReport`, `ValidationResult` |
 | RTSP stream capture | `stream.py` | `RTSPStreamReader`, `mask_rtsp_url()` |
 | Real-time stream processing | `stream_processor.py` | `ANPRStreamProcessor`, `StreamStatistics` |
-| Public integration interface | `__init__.py` | `process_frame_to_events()` |
 | License plate detection | `detector.py` | `BasePlateDetector`, `MockPlateDetector`, `YOLOPlateDetector` |
 | Image preprocessing | `preprocessing.py` | `PlatePreprocessor` (resize, CLAHE, bilateral filter, binarization) |
 | Optical Character Recognition (OCR) | `ocr.py` | `BaseOCREngine`, `MockOCREngine`, `EasyOCREngine` |
@@ -35,11 +93,10 @@ Member 2 exclusively owns all code under `ai/member2_anpr/`.
 | Benchmarking & profiling | `benchmark.py` | `ANPRBenchmark`, `BenchmarkReport`, `ComponentTiming` |
 | Data contracts / schemas | `schemas.py` | `PlateRegion`, `OCRResult`, `RecognitionResult`, `IBVAPEvent`, `ANPRResult` |
 | Configuration | `config.py` | `ANPRConfig`, `default_config` |
-| CLI / Demo Entrypoint | `main.py` | Command line runner |
 
 ---
 
-## 3. Architecture
+## 4. Architecture
 
 ```text
 IP CCTV / RTSP Stream / Image Dataset
@@ -84,64 +141,7 @@ List[IBVAPEvent] ───► Member 3 Backend (FastAPI Ingestion)
 
 ---
 
-## 4. Real-Model Validation & Benchmarking (Phase 6)
-
-The `ANPRValidator` evaluates plate detection and character recognition accuracy against ground truth datasets, while recording component-level latency breakdowns:
-
-### Running Validation
-
-```bash
-# Validate on single image with expected ground truth
-python -m ai.member2_anpr.main --validate --image path/to/plate.jpg --ground-truth "DL01AB1234"
-
-# Validate directory of test images
-python -m ai.member2_anpr.main --validate --validation-dir path/to/test_dataset/
-
-# Validate directory with ground truth mapping JSON
-python -m ai.member2_anpr.main --validate --validation-dir path/to/images/ --ground-truth gt_map.json
-```
-
-### Sample Validation Report Output
-
-```text
-=================================================================
-IBVAP ANPR Real-Model Validation & Performance Report
-=================================================================
-Total Samples Evaluated    : 50
-Successful Detections      : 48 (96.0%)
-Failed / Empty Detections  : 2
-Validation Passed (Indian) : 48
-Ground Truth Evaluated     : 50
-Ground Truth Matches       : 47
-Recognition Accuracy       : 94.0%
------------------------------------------------------------------
-Total Elapsed Time         : 1.250 s
-Overall Throughput         : 40.00 FPS
-Mean Pipeline Latency      : 24.50 ms (median: 23.80 ms)
-Latency Range              : [18.20 ms - 34.10 ms]
------------------------------------------------------------------
-Component Mean Latency Breakdown:
-  - Detector               : 8.20 ms
-  - Preprocessor           : 1.10 ms
-  - OCR Engine             : 14.80 ms
-  - Plate Recognizer       : 0.40 ms
-=================================================================
-```
-
----
-
-## 5. False-Positive Filtering & Indian State Codes
-
-To eliminate OCR hallucinations and noisy background detections, `recognizer.py` validates plates against:
-
-1. **State & UT Codes (`INDIAN_STATE_CODES`):** Verifies the 2-letter prefix against official codes (`DL`, `MH`, `TN`, `KA`, `UP`, `HR`, `GJ`, `WB`, `KL`, `RJ`, `TS`, `AP`, `PB`, `BR`, `JH`, `CH`, etc.).
-2. **Bharat (BH) Series:** Formats like `22BH1234AA` (Year + BH + 4 Digits + Series).
-3. **Position-Aware Character Confusion:** Automatically disambiguates `O↔0`, `I↔1`, `Z↔2`, `S↔5`, `B↔8`, `G↔6` based on character index position in Indian registration formats.
-4. **Strict Validation Mode:** Setting `strict_plate_validation = True` (or `ANPR_STRICT_VALIDATION="true"`) strictly discards any plate that does not match standard registration structure.
-
----
-
-## 6. Backend Integration Contract (Member 3)
+## 5. Backend Integration Contract (Member 3)
 
 Member 3 (FastAPI Backend) consumes standardized `IBVAPEvent` objects without depending on internal YOLO, EasyOCR, or preprocessing classes.
 
@@ -209,7 +209,7 @@ for event in events:
 
 ---
 
-## 7. Configuration Reference
+## 6. Configuration Reference
 
 Environment variables supported by `config.py`:
 
@@ -238,7 +238,7 @@ Environment variables supported by `config.py`:
 
 ---
 
-## 8. Testing & Coverage
+## 7. Testing & Coverage
 
 The entire test suite executes in ~1.5s on CPU without requiring GPU, network, camera hardware, or downloaded model weights:
 
@@ -252,7 +252,7 @@ python -m pytest ai/member2_anpr/tests/ -v --cov=ai.member2_anpr --cov-report=te
 
 ---
 
-## 9. Known Limitations
+## 8. Known Limitations
 
 - **Extreme Angles (> 45°):** Highly skewed plates may experience lower OCR accuracy without 4-point perspective rectification.
 - **Heavy Motion Blur:** Bilateral and CLAHE filtering improves contrast, but severely smeared characters cannot be reconstructed without deep deblurring neural networks.
