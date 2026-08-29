@@ -132,3 +132,89 @@ export interface EventFilters {
 export interface EventCount {
   count: number;
 }
+
+// ---------------------------------------------------------------------------
+// Phase 3B Analytics & Threat Intelligence Types
+// ---------------------------------------------------------------------------
+
+export type ThreatSeverity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
+
+export interface ThreatCounts {
+  total_threats: number;
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+}
+
+export interface ConfidenceStats {
+  avg_confidence: number;
+  min_confidence: number;
+  max_confidence: number;
+}
+
+export interface AnalyticsSummary {
+  total_events: number;
+  threats: ThreatCounts;
+  confidence_stats: ConfidenceStats;
+  event_type_counts: Record<string, number>;
+  time_range: {
+    start_time?: string | null;
+    end_time?: string | null;
+  };
+}
+
+export interface TrendBucket {
+  bucket: string;
+  total_events: number;
+  intrusions: number;
+  watchlist_matches: number;
+  suspicious_activity: number;
+  vehicles: number;
+  persons: number;
+  total_threats: number;
+  avg_confidence: number;
+}
+
+export interface AnalyticsTrends {
+  interval: string;
+  trends: TrendBucket[];
+}
+
+export interface CameraActivityRanking {
+  camera_id: string;
+  camera_name?: string | null;
+  location?: string | null;
+  status?: string | null;
+  total_events: number;
+  threat_count: number;
+  critical_threats: number;
+  high_threats: number;
+  medium_threats: number;
+  avg_confidence: number;
+  last_event_time?: string | null;
+}
+
+export interface AnalyticsCameras {
+  cameras: CameraActivityRanking[];
+}
+
+export interface EventTypeDistributionItem {
+  event_type: string;
+  count: number;
+  percentage: number;
+}
+
+export interface AnalyticsDistribution {
+  total_events: number;
+  distribution: EventTypeDistributionItem[];
+  threat_breakdown: ThreatCounts;
+}
+
+export interface AnalyticsQueryParams {
+  start_time?: string;
+  end_time?: string;
+  camera_id?: string;
+  event_type?: string;
+  interval?: 'hourly' | 'daily';
+}

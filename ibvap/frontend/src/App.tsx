@@ -8,6 +8,7 @@ import { Dashboard } from './pages/Dashboard';
 import { LiveEvents } from './pages/LiveEvents';
 import { Alerts } from './pages/Alerts';
 import { ANPR } from './pages/ANPR';
+import { Analytics } from './pages/Analytics';
 import { Events } from './pages/Events';
 import { EventDetails } from './pages/EventDetails';
 import { Cameras } from './pages/Cameras';
@@ -32,6 +33,7 @@ export function App() {
                 <Route path="live-events" element={<LiveEvents />} />
                 <Route path="alerts" element={<Alerts />} />
                 <Route path="anpr" element={<ANPR />} />
+                <Route path="analytics" element={<Analytics />} />
                 <Route path="events" element={<Events />} />
                 <Route path="events/:id" element={<EventDetails />} />
                 <Route path="cameras" element={<Cameras />} />

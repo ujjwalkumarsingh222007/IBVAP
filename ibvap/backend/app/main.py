@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.database import init_db
 from app.auth import auth_router
 from app.routes import (
+    analytics_router,
     cameras_router,
     dashboard_router,
     events_router,
@@ -58,6 +59,7 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(events_router)
 app.include_router(dashboard_router)
+app.include_router(analytics_router)
 app.include_router(cameras_router)
 app.include_router(health_router)
 
