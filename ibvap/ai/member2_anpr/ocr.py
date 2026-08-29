@@ -150,7 +150,7 @@ class EasyOCREngine(BaseOCREngine):
         else:
             try:
                 import easyocr  # lazy import
-                self._reader = easyocr.Reader(self.languages, gpu=self.gpu)
+                self._reader = easyocr.Reader(self.languages, gpu=self.gpu, verbose=False)
                 logger.info(
                     "EasyOCREngine initialized successfully (languages=%s, gpu=%s)",
                     self.languages,

@@ -1,8 +1,12 @@
 import React from 'react';
-import { Clock, Eye, Target } from 'lucide-react';
+import {
+  Clock,
+  Eye,
+  Camera as CameraIcon,
+} from 'lucide-react';
 import { SurveillanceEvent } from '../../types';
-import { EventBadge } from '../common/Badge';
 import { EmptyState } from '../common/EmptyState';
+import { alertRules } from '../../utils/alertRules';
 
 interface EventTableProps {
   events: SurveillanceEvent[];
@@ -21,7 +25,7 @@ export const EventTable: React.FC<EventTableProps> = ({
         {Array.from({ length: 6 }).map((_, i) => (
           <div
             key={i}
-            className="h-14 bg-surface border border-surface-border rounded-xl animate-pulse"
+            className="h-12 bg-surface border border-surface-border rounded-xl animate-pulse"
           />
         ))}
       </div>
@@ -31,87 +35,88 @@ export const EventTable: React.FC<EventTableProps> = ({
   if (events.length === 0) {
     return (
       <EmptyState
-        title="No Surveillance Events Found"
-        description="No events match your current filter parameters or no alerts have been reported yet."
+        title="No Events Found"
+        description="No events match your current filter parameters or no activity has been recorded yet."
       />
     );
   }
 
   return (
-    <div className="bg-surface border border-surface-border rounded-xl overflow-hidden shadow-lg">
+    <div className="bg-surface border border-surface-border rounded-xl overflow-hidden shadow-lg font-mono">
       <div className="overflow-x-auto">
-        <table className="w-full text-left text-xs font-mono">
-          <thead className="bg-slate-900/90 border-b border-surface-border text-slate-400 uppercase tracking-wider text-[11px]">
+        <table className="w-full text-left text-xs">
+          <thead className="bg-slate-950/60 border-b border-surface-border text-slate-400 uppercase tracking-wider text-[11px]">
             <tr>
-              <th className="py-3.5 pl-4">ID</th>
-              <th className="py-3.5">Category</th>
+              <th className="py-3.5 pl-4">Time</th>
               <th className="py-3.5">Camera</th>
-              <th className="py-3.5">Confidence</th>
-              <th className="py-3.5">Track / Class</th>
-              <th className="py-3.5">Position (X, Y)</th>
-              <th className="py-3.5">Timestamp</th>
-              <th className="py-3.5 text-right pr-4">Details</th>
+              <th className="py-3.5">Detection</th>
+              <th className="py-3.5">Identity</th>
+              <th className="py-3.5">Status</th>
+              <th className="py-3.5 text-right pr-4">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-surface-border/40">
             {events.map((ev) => {
-              const trackId = ev.metadata?.track_id;
-              const className = ev.metadata?.class_name;
-              const position = ev.metadata?.position;
+              const cls = alertRules.classify(ev);
+              const timeFormatted = ev.timestamp
+                ? new Date(ev.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                : '--:--:--';
+
+              let badgeClasses = 'bg-slate-900 text-slate-300 border-slate-700';
+              if (cls.badgeType === 'known' || cls.statusLabel === 'Registered') {
+                badgeClasses = 'bg-emerald-950/60 text-emerald-300 border-emerald-800';
+              } else if (cls.badgeType === 'flagged' || cls.badgeType === 'watchlist') {
+                badgeClasses = 'bg-red-950 text-red-300 border-red-800';
+              } else if (cls.badgeType === 'alert') {
+                badgeClasses = 'bg-amber-950/80 text-amber-300 border-amber-800';
+              }
 
               return (
                 <tr
                   key={ev.id}
                   onClick={() => onSelectEvent && onSelectEvent(ev.id)}
-                  className="hover:bg-slate-800/40 transition-colors group cursor-pointer"
+                  className={`hover:bg-slate-800/40 transition-colors group cursor-pointer ${
+                    cls.isAlert ? 'bg-red-950/10' : ''
+                  }`}
                 >
-                  <td className="py-3.5 pl-4 font-semibold text-slate-300">
-                    #{ev.id}
+                  {/* Time */}
+                  <td className="py-3.5 pl-4 text-slate-400">
+                    <span className="flex items-center gap-1.5 font-sans">
+                      <Clock className="w-3.5 h-3.5 text-slate-500" />
+                      {timeFormatted}
+                    </span>
                   </td>
-                  <td className="py-3.5">
-                    <EventBadge eventType={ev.event_type} />
-                  </td>
+
+                  {/* Camera */}
                   <td className="py-3.5 text-slate-300 font-semibold">
-                    {ev.camera_id}
+                    <span className="flex items-center gap-1.5">
+                      <CameraIcon className="w-3.5 h-3.5 text-cyan-400" />
+                      {ev.camera_id}
+                    </span>
                   </td>
+
+                  {/* Detection */}
+                  <td className="py-3.5 text-slate-200 font-bold">
+                    {cls.detectionType}
+                  </td>
+
+                  {/* Identity */}
+                  <td className="py-3.5 text-slate-300">
+                    <span className={cls.identity === 'Unknown' ? 'text-red-400 font-semibold' : ''}>
+                      {cls.identity}
+                    </span>
+                  </td>
+
+                  {/* Status Badge */}
                   <td className="py-3.5">
                     <span
-                      className={`font-semibold ${
-                        ev.confidence >= 0.85
-                          ? 'text-emerald-400'
-                          : ev.confidence >= 0.6
-                          ? 'text-blue-400'
-                          : 'text-amber-400'
-                      }`}
+                      className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold border uppercase ${badgeClasses}`}
                     >
-                      {(ev.confidence * 100).toFixed(1)}%
+                      {cls.statusLabel}
                     </span>
                   </td>
-                  <td className="py-3.5 text-slate-300">
-                    {trackId !== undefined ? (
-                      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-slate-900 border border-slate-800">
-                        <Target className="w-3 h-3 text-blue-400" />
-                        #{trackId} <span className="text-slate-400">({className || 'object'})</span>
-                      </span>
-                    ) : (
-                      className || '—'
-                    )}
-                  </td>
-                  <td className="py-3.5 text-slate-400">
-                    {position ? (
-                      <span>
-                        X: {position.x}, Y: {position.y}
-                      </span>
-                    ) : (
-                      '—'
-                    )}
-                  </td>
-                  <td className="py-3.5 text-slate-400">
-                    <span className="flex items-center gap-1.5 text-[11px]">
-                      <Clock className="w-3 h-3 text-slate-500" />
-                      {ev.timestamp.replace('T', ' ').substring(0, 19)}
-                    </span>
-                  </td>
+
+                  {/* Actions */}
                   <td className="py-3.5 text-right pr-4">
                     <button
                       type="button"
@@ -119,10 +124,10 @@ export const EventTable: React.FC<EventTableProps> = ({
                         e.stopPropagation();
                         if (onSelectEvent) onSelectEvent(ev.id);
                       }}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 transition-colors border border-slate-700 font-sans text-xs"
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 transition-colors border border-slate-700 font-sans text-xs font-semibold"
                     >
                       <Eye className="w-3.5 h-3.5" />
-                      View
+                      View Details
                     </button>
                   </td>
                 </tr>
@@ -134,3 +139,5 @@ export const EventTable: React.FC<EventTableProps> = ({
     </div>
   );
 };
+
+export default EventTable;

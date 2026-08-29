@@ -78,6 +78,26 @@ def create_event(
         event_metadata=event_in.metadata,
     )
     db.add(db_event)
+    db.flush()
+
+    try:
+        from app.services.threat_correlation_service import ThreatCorrelationService
+        event_dict = {
+            "id": db_event.id,
+            "camera_id": db_event.camera_id,
+            "event_type": db_event.event_type,
+            "timestamp": db_event.timestamp,
+            "confidence": db_event.confidence,
+            "metadata": db_event.event_metadata,
+        }
+        ThreatCorrelationService.get_instance().correlate_frame_events(
+            frame_events=[event_dict],
+            camera_id=db_event.camera_id,
+            db=db,
+        )
+    except Exception as exc:
+        logger.warning("Threat correlation error on event create: %s", exc)
+
     db.commit()
     db.refresh(db_event)
 

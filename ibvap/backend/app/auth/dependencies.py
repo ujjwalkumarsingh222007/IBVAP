@@ -4,17 +4,17 @@ dependencies.py — FastAPI dependencies for authentication, role-based authoriz
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Callable, Optional, Sequence, Union
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import AuditLog, User
-from app.auth.schemas import UserRole
+from app.schemas import UserRole
 from app.auth.security import decode_access_token
 
-# HTTP Bearer scheme
+# HTTP Bearer scheme (auto_error=False allows clean custom 401 exceptions)
 security_bearer = HTTPBearer(auto_error=False)
 
 
@@ -26,7 +26,7 @@ def log_audit_action(
     success: bool = True,
     user_id: Optional[int] = None,
     details: Optional[str] = None,
-) -> AuditLog:
+) -> Optional[AuditLog]:
     """
     Persist an audit log entry for security and regulatory compliance.
     Passwords and raw authentication tokens are NEVER logged.
@@ -59,12 +59,16 @@ def get_current_user(
     """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials or token expired",
+        detail="Could not validate credentials or token has expired",
         headers={"WWW-Authenticate": "Bearer"},
     )
 
     if not auth_header or not auth_header.credentials:
-        raise credentials_exception
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication credentials were not provided",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     token = auth_header.credentials
     payload = decode_access_token(token)
@@ -72,7 +76,7 @@ def get_current_user(
         raise credentials_exception
 
     username: Optional[str] = payload.get("sub")
-    if username is None:
+    if not username:
         raise credentials_exception
 
     user = db.query(User).filter(User.username == username).first()
@@ -94,69 +98,38 @@ def get_current_user_optional(
     db: Session = Depends(get_db),
 ) -> Optional[User]:
     """
-    Optional authentication dependency for endpoints that allow both authenticated
-    and unauthenticated access while still capturing user context when provided.
+    Extract user from Bearer token if present; returns None if omitted or invalid without raising 401.
     """
     if not auth_header or not auth_header.credentials:
         return None
-
-    try:
-        token = auth_header.credentials
-        payload = decode_access_token(token)
-        if not payload:
-            return None
-
-        username = payload.get("sub")
-        if not username:
-            return None
-
-        user = db.query(User).filter(User.username == username, User.is_active == True).first()
-        return user
-    except Exception:
+    payload = decode_access_token(auth_header.credentials)
+    if not payload or not payload.get("sub"):
         return None
+    return db.query(User).filter(User.username == payload.get("sub")).first()
 
 
-def require_admin(
-    current_user: User = Depends(get_current_user),
-) -> User:
+def require_role(*roles: Union[UserRole, str]) -> Callable[[User], User]:
     """
-    Require the authenticated user to possess the ADMIN role.
-    Raises HTTP 403 Forbidden if the user lacks administrative privileges.
+    Dependency factory that enforces role-based access control.
+    Returns a dependency that validates the user's role and raises HTTP 403 Forbidden if unauthorized.
+
+    Example:
+        @router.post("/cameras", dependencies=[Depends(require_role(UserRole.ADMIN))])
     """
-    if current_user.role != UserRole.ADMIN.value:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Administrative privileges required for this action",
-        )
-    return current_user
+    allowed_roles = {r.value if hasattr(r, "value") else str(r) for r in roles}
+
+    def role_checker(current_user: User = Depends(get_current_user)) -> User:
+        if current_user.role not in allowed_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Forbidden: Action requires one of roles: {', '.join(sorted(allowed_roles))}",
+            )
+        return current_user
+
+    return role_checker
 
 
-def require_operator(
-    current_user: User = Depends(get_current_user),
-) -> User:
-    """
-    Require the authenticated user to possess at least OPERATOR or ADMIN role.
-    Raises HTTP 403 Forbidden if the user is a read-only VIEWER.
-    """
-    allowed_roles = {UserRole.ADMIN.value, UserRole.OPERATOR.value}
-    if current_user.role not in allowed_roles:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Operator or Admin privileges required for this action",
-        )
-    return current_user
-
-
-def require_viewer(
-    current_user: User = Depends(get_current_user),
-) -> User:
-    """
-    Require the authenticated user to possess valid role access (VIEWER, OPERATOR, or ADMIN).
-    """
-    allowed_roles = {UserRole.ADMIN.value, UserRole.OPERATOR.value, UserRole.VIEWER.value}
-    if current_user.role not in allowed_roles:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Valid authorization required to access surveillance data",
-        )
-    return current_user
+# Pre-configured role dependencies
+require_admin = require_role(UserRole.ADMIN)
+require_operator = require_role(UserRole.ADMIN, UserRole.OPERATOR)
+require_viewer = require_role(UserRole.ADMIN, UserRole.OPERATOR, UserRole.VIEWER)

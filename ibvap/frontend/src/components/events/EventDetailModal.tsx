@@ -71,6 +71,10 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
   const watchlistReason = meta.watchlist_reason ? String(meta.watchlist_reason) : null;
   const validationReason = meta.validation_reason ? String(meta.validation_reason) : null;
   const rawOcrText = meta.raw_ocr_text ? String(meta.raw_ocr_text) : null;
+  const imagePath = meta.image_path ? String(meta.image_path) : null;
+  const cropImagePath = meta.crop_image_path ? String(meta.crop_image_path) : null;
+  const displayImage = cropImagePath || imagePath;
+  const [imageError, setImageError] = useState<boolean>(false);
 
   const severity = event ? getEventSeverity(event.event_type) : 'LOW';
   const sevConfig = getSeverityConfig(severity);
@@ -168,6 +172,30 @@ export const EventDetailModal: React.FC<EventDetailModalProps> = ({
                 </span>
               </div>
             </div>
+
+            {/* Captured Evidence Photo if Available */}
+            {displayImage && (
+              <div className="p-3 bg-slate-900/60 rounded-xl border border-slate-800 space-y-2">
+                <span className="text-slate-400 flex items-center gap-1.5 text-[11px]">
+                  <CameraIcon className="w-3.5 h-3.5 text-cyan-400" /> Captured Evidence Photo
+                </span>
+                <div className="relative aspect-video max-h-48 bg-black rounded-lg overflow-hidden flex items-center justify-center border border-slate-800">
+                  {imageError ? (
+                    <div className="text-slate-500 text-xs flex items-center gap-1.5 font-sans">
+                      <AlertTriangle className="w-4 h-4 text-amber-500" />
+                      <span>Image unavailable</span>
+                    </div>
+                  ) : (
+                    <img
+                      src={displayImage}
+                      alt="Captured Surveillance Evidence"
+                      className="w-full h-full object-contain"
+                      onError={() => setImageError(true)}
+                    />
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Dynamic Metadata Section - Only fields that exist */}
             <div className="p-4 bg-slate-900/40 rounded-xl border border-slate-800 space-y-3">

@@ -25,13 +25,13 @@ class ANPRConfig:
 
     # --- Detector ---
     detector_backend: str = field(
-        default_factory=lambda: os.getenv("ANPR_DETECTOR_BACKEND", "mock")
+        default_factory=lambda: os.getenv("ANPR_DETECTOR_BACKEND", "yolo")
     )
-    """Which plate-detector backend to use ('mock', 'yolo', etc.)."""
+    """Which plate-detector backend to use ('yolo', 'mock', etc.)."""
 
     detector_model_path: Optional[str] = field(
         default_factory=lambda: os.getenv(
-            "PLATE_MODEL_PATH", os.getenv("ANPR_DETECTOR_MODEL_PATH", "models/license_plate.pt")
+            "PLATE_MODEL_PATH", os.getenv("ANPR_DETECTOR_MODEL_PATH", "ai/member2_anpr/models/license_plate.pt")
         )
     )
     """Path to the detector model weights (e.g. YOLO .pt file)."""
@@ -50,9 +50,9 @@ class ANPRConfig:
 
     # --- OCR ---
     ocr_backend: str = field(
-        default_factory=lambda: os.getenv("ANPR_OCR_BACKEND", "mock")
+        default_factory=lambda: os.getenv("ANPR_OCR_BACKEND", "easyocr")
     )
-    """Which OCR engine to use ('mock', 'easyocr', 'tesseract', etc.)."""
+    """Which OCR engine to use ('easyocr', 'mock', 'tesseract', etc.)."""
 
     ocr_confidence_threshold: float = field(
         default_factory=lambda: float(os.getenv("ANPR_OCR_CONF", "0.40"))

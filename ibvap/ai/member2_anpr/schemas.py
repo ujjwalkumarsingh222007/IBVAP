@@ -134,6 +134,7 @@ class ANPRResult(BaseModel):
     plate_number: Optional[str] = Field(default=None)
     plate_confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     ocr_confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    bbox: Optional[Dict[str, int]] = Field(default=None, description="Bounding box {x1, y1, x2, y2} of detected plate")
     vehicle_id: Optional[str] = Field(default=None, description="Associated vehicle tracking ID if provided")
     watchlist_match: bool = Field(default=False)
     watchlist_status: Optional[str] = Field(default=None)

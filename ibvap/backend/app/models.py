@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Column, DateTime, Float, Integer, JSON, String
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, JSON, String
 from app.database import Base
 
 
@@ -37,6 +37,65 @@ class Event(Base):
             f"<Event(id={self.id}, camera_id='{self.camera_id}', "
             f"event_type='{self.event_type}', confidence={self.confidence})>"
         )
+
+
+class Threat(Base):
+    """
+    Correlated Threat model representing high-level intelligence formed by aggregating
+    and correlating related surveillance events on a camera stream.
+    """
+
+    __tablename__ = "threats"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    threat_id = Column(String(64), unique=True, index=True, nullable=False)
+    camera_id = Column(String(64), nullable=False, index=True)
+    severity = Column(String(32), nullable=False, index=True)  # CRITICAL, HIGH, MEDIUM, LOW
+    score = Column(Float, nullable=False)  # 0.0 to 100.0
+    title = Column(String(128), nullable=False)
+    reason = Column(String(256), nullable=False)
+    status = Column(String(32), default="ACTIVE", nullable=False, index=True)  # ACTIVE, ACKNOWLEDGED, RESOLVED
+    first_event_time = Column(String(64), nullable=False)
+    last_event_time = Column(String(64), nullable=False)
+    event_count = Column(Integer, default=1, nullable=False)
+    threat_metadata = Column("metadata", JSON, nullable=False, default=dict)
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<Threat(id={self.id}, threat_id='{self.threat_id}', camera_id='{self.camera_id}', "
+            f"severity='{self.severity}', score={self.score}, status='{self.status}')>"
+        )
+
+
+class ThreatEventRelation(Base):
+    """
+    Join table associating individual surveillance Event records with a parent Threat.
+    """
+
+    __tablename__ = "threat_events"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    threat_id = Column(Integer, ForeignKey("threats.id", ondelete="CASCADE"), nullable=False, index=True)
+    event_id = Column(Integer, ForeignKey("events.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    def __repr__(self) -> str:
+        return f"<ThreatEventRelation(id={self.id}, threat_id={self.threat_id}, event_id={self.event_id})>"
 
 
 class Camera(Base):
@@ -87,6 +146,12 @@ class User(Base):
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=True,
+    )
 
     def __repr__(self) -> str:
         return f"<User(id={self.id}, username='{self.username}', role='{self.role}', is_active={self.is_active})>"
@@ -115,3 +180,102 @@ class AuditLog(Base):
 
     def __repr__(self) -> str:
         return f"<AuditLog(id={self.id}, username='{self.username}', action='{self.action}', success={self.success})>"
+
+
+class Evidence(Base):
+    """
+    Evidence model representing a captured image and detection crop for an
+    UNKNOWN or FLAGGED person or vehicle.
+    """
+
+    __tablename__ = "evidence"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    camera_id = Column(String(64), nullable=False, index=True)
+    timestamp = Column(String(64), nullable=False)
+    detection_type = Column(String(32), nullable=False, index=True)  # person / vehicle
+    status = Column(String(32), nullable=False, index=True)  # UNKNOWN / FLAGGED / KNOWN
+    confidence = Column(Float, nullable=False)
+    image_path = Column(String(256), nullable=False)
+    crop_image_path = Column(String(256), nullable=True)
+    bbox_x1 = Column(Float, nullable=True)
+    bbox_y1 = Column(Float, nullable=True)
+    bbox_x2 = Column(Float, nullable=True)
+    bbox_y2 = Column(Float, nullable=True)
+    person_id = Column(String(64), nullable=True)
+    vehicle_id = Column(String(64), nullable=True)
+    plate_number = Column(String(64), nullable=True)
+    reason = Column(String(256), nullable=True)
+    event_id = Column(Integer, ForeignKey("events.id", ondelete="SET NULL"), nullable=True, index=True)
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<Evidence(id={self.id}, camera_id='{self.camera_id}', "
+            f"type='{self.detection_type}', status='{self.status}', confidence={self.confidence})>"
+        )
+
+
+class Person(Base):
+    """
+    Person model representing a registered person with status (KNOWN / FLAGGED),
+    stored face photo path, and feature embedding vector for live recognition.
+    """
+
+    __tablename__ = "persons"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    person_code = Column(String(64), unique=True, index=True, nullable=False)
+    name = Column(String(128), nullable=False, index=True)
+    status = Column(String(32), default="KNOWN", nullable=False, index=True)  # KNOWN / FLAGGED
+    face_image_path = Column(String(256), nullable=True)
+    face_embedding = Column(JSON, nullable=True)  # List[float] embedding vector
+    notes = Column(String(256), nullable=True)
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=True,
+    )
+
+    def __repr__(self) -> str:
+        return f"<Person(id={self.id}, code='{self.person_code}', name='{self.name}', status='{self.status}')>"
+
+
+class RegisteredVehicle(Base):
+    """
+    Registered vehicle model representing known or watchlisted license plates.
+    """
+
+    __tablename__ = "registered_vehicles"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    plate_number = Column(String(64), unique=True, index=True, nullable=False)
+    owner_name = Column(String(128), nullable=False)
+    status = Column(String(32), default="KNOWN", nullable=False, index=True)  # KNOWN / FLAGGED / WATCHLIST
+    notes = Column(String(256), nullable=True)
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=True,
+    )
+
+    def __repr__(self) -> str:
+        return f"<RegisteredVehicle(id={self.id}, plate='{self.plate_number}', status='{self.status}')>"
+
+

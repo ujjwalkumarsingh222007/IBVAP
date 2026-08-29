@@ -85,8 +85,8 @@ export const Events: React.FC = () => {
   return (
     <div className="space-y-6">
       <Header
-        title="Event Explorer & Archive"
-        subtitle="Searchable Surveillance Archive, Multi-Filter Query Engine & Metadata Logs"
+        title="Events"
+        subtitle="Surveillance event detection logs and history"
         onRefresh={() => fetchEvents(filters, true)}
         isRefreshing={refreshing}
       />

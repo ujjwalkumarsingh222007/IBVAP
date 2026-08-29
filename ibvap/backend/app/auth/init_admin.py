@@ -9,6 +9,14 @@ from sqlalchemy.orm import Session
 
 from app.models import User
 from app.auth.security import hash_password
+from app.config import (
+    ADMIN_USERNAME,
+    ADMIN_PASSWORD,
+    OPERATOR_USERNAME,
+    OPERATOR_PASSWORD,
+    VIEWER_USERNAME,
+    VIEWER_PASSWORD,
+)
 
 
 def init_default_users(db: Session) -> None:
@@ -20,12 +28,9 @@ def init_default_users(db: Session) -> None:
     admin_exists = db.query(User).filter(User.role == "ADMIN").first()
 
     if not admin_exists:
-        admin_username = os.getenv("ADMIN_USERNAME", "admin")
-        admin_password = os.getenv("ADMIN_PASSWORD", "admin123")
-
         admin_user = User(
-            username=admin_username,
-            password_hash=hash_password(admin_password),
+            username=ADMIN_USERNAME,
+            password_hash=hash_password(ADMIN_PASSWORD),
             role="ADMIN",
             is_active=True,
         )
@@ -33,24 +38,22 @@ def init_default_users(db: Session) -> None:
         db.commit()
 
     # Also ensure a sample OPERATOR and VIEWER exist for multi-role demonstration
-    operator_exists = db.query(User).filter(User.username == "operator").first()
+    operator_exists = db.query(User).filter(User.username == OPERATOR_USERNAME).first()
     if not operator_exists:
-        operator_pw = os.getenv("OPERATOR_PASSWORD", "operator123")
         op_user = User(
-            username="operator",
-            password_hash=hash_password(operator_pw),
+            username=OPERATOR_USERNAME,
+            password_hash=hash_password(OPERATOR_PASSWORD),
             role="OPERATOR",
             is_active=True,
         )
         db.add(op_user)
         db.commit()
 
-    viewer_exists = db.query(User).filter(User.username == "viewer").first()
+    viewer_exists = db.query(User).filter(User.username == VIEWER_USERNAME).first()
     if not viewer_exists:
-        viewer_pw = os.getenv("VIEWER_PASSWORD", "viewer123")
         view_user = User(
-            username="viewer",
-            password_hash=hash_password(viewer_pw),
+            username=VIEWER_USERNAME,
+            password_hash=hash_password(VIEWER_PASSWORD),
             role="VIEWER",
             is_active=True,
         )

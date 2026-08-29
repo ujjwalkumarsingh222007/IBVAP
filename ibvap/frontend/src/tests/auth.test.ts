@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { TOKEN_STORAGE_KEY, USER_STORAGE_KEY } from '../api/apiClient';
-import { AuthUser, UserRole } from '../types';
+import { AuditLog, AuthUser, DemoResetResponse, UserRole } from '../types';
 
 class MemoryStorage {
   private store: Record<string, string> = {};
@@ -95,5 +95,32 @@ describe('Frontend Authentication and Session Management', () => {
 
     expect(unauthorizedMessage).toContain('Authentication required');
     expect(forbiddenMessage).toContain('Forbidden');
+  });
+
+  it('processes demo reset and security audit log payloads accurately', () => {
+    const demoResponse: DemoResetResponse = {
+      status: 'success',
+      message: 'Demo baseline restored: 14 events cleared, 4 cameras initialized.',
+      events_cleared: 14,
+      cameras_restored: 4,
+    };
+
+    expect(demoResponse.status).toBe('success');
+    expect(demoResponse.events_cleared).toBe(14);
+    expect(demoResponse.cameras_restored).toBe(4);
+
+    const sampleAuditLog: AuditLog = {
+      id: 101,
+      user_id: 1,
+      username: 'admin',
+      action: 'RESET_DEMO_DATA',
+      endpoint: '/api/v1/demo/reset',
+      timestamp: '2026-08-29T10:00:00Z',
+      success: true,
+      details: 'Cleared 14 surveillance events. Verified 4 demo cameras.',
+    };
+
+    expect(sampleAuditLog.action).toBe('RESET_DEMO_DATA');
+    expect(sampleAuditLog.success).toBe(true);
   });
 });

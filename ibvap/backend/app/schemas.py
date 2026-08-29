@@ -26,6 +26,10 @@ class EventType(str, Enum):
     INTRUSION_DETECTED = "INTRUSION_DETECTED"
     WATCHLIST_MATCH = "WATCHLIST_MATCH"
     SUSPICIOUS_ACTIVITY = "SUSPICIOUS_ACTIVITY"
+    UNKNOWN_PERSON = "UNKNOWN_PERSON"
+    FLAGGED_PERSON = "FLAGGED_PERSON"
+    UNKNOWN_VEHICLE = "UNKNOWN_VEHICLE"
+    FLAGGED_VEHICLE = "FLAGGED_VEHICLE"
 
 
 class EventBase(BaseModel):
@@ -176,7 +180,7 @@ class DashboardSummaryResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Health Schemas
+# Health & System Schemas
 # ---------------------------------------------------------------------------
 
 class HealthResponse(BaseModel):
@@ -184,6 +188,30 @@ class HealthResponse(BaseModel):
     status: str = Field(..., description="Overall system health status (e.g. healthy).")
     service: str = Field(..., description="Service name identifier.")
     database: str = Field(..., description="Database connection status (connected/disconnected).")
+    version: str = Field(default="1.0.0", description="Backend API service version.")
+    uptime_seconds: Optional[float] = Field(default=None, description="System uptime in seconds.")
+    active_cameras: Optional[int] = Field(default=None, description="Number of currently active/online cameras.")
+    total_events: Optional[int] = Field(default=None, description="Total persisted surveillance events.")
+    ai_pipeline_status: Optional[str] = Field(default="ONLINE", description="AI pipeline status.")
+    anpr_detector: Optional[str] = Field(default=None, description="Active license plate detector.")
+    ocr_engine: Optional[str] = Field(default=None, description="Active OCR recognition engine.")
+
+
+# ---------------------------------------------------------------------------
+# Demo Management Schemas
+# ---------------------------------------------------------------------------
+
+class DemoResetRequest(BaseModel):
+    """Payload to confirm demo data reset."""
+    confirm: bool = Field(..., description="Confirmation flag required to clear demo events.")
+
+
+class DemoResetResponse(BaseModel):
+    """Result of demo data reset."""
+    status: str = Field(..., description="Result status.")
+    message: str = Field(..., description="Explanation of action taken.")
+    events_cleared: int = Field(0, description="Count of surveillance events cleared.")
+    cameras_restored: int = Field(0, description="Count of cameras verified/restored.")
 
 
 # ---------------------------------------------------------------------------
@@ -273,3 +301,265 @@ class AnalyticsDistributionResponse(BaseModel):
     total_events: int = Field(0, description="Total events analyzed.")
     distribution: List[EventTypeDistributionItem] = Field(default_factory=list, description="Distribution by event type.")
     threat_breakdown: ThreatCounts = Field(default_factory=ThreatCounts, description="Threat counts by severity.")
+
+
+# ---------------------------------------------------------------------------
+# Authentication & User Schemas
+# ---------------------------------------------------------------------------
+
+class UserRole(str, Enum):
+    """Allowed user security roles."""
+    ADMIN = "ADMIN"
+    OPERATOR = "OPERATOR"
+    VIEWER = "VIEWER"
+
+
+class LoginRequest(BaseModel):
+    """User credentials for authentication."""
+    username: str = Field(..., min_length=1, max_length=64, description="User username")
+    password: str = Field(..., min_length=1, description="User password")
+
+
+class TokenResponse(BaseModel):
+    """Bearer token payload returned after successful login."""
+    access_token: str = Field(..., description="JWT Bearer access token")
+    token_type: str = Field(default="bearer", description="Token scheme")
+    expires_in: int = Field(..., description="Access token lifetime in seconds")
+    role: Optional[str] = Field(default=None, description="Assigned role of authenticated user")
+    username: Optional[str] = Field(default=None, description="Username of authenticated user")
+
+
+class UserCreate(BaseModel):
+    """Schema for registering a new user."""
+    username: str = Field(..., min_length=3, max_length=64, description="Unique username")
+    password: str = Field(..., min_length=6, description="Password (min 6 chars)")
+    role: UserRole = Field(default=UserRole.OPERATOR, description="Assigned role")
+
+
+class UserResponse(BaseModel):
+    """Safe user profile response (password hash omitted)."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int = Field(..., description="Unique database user ID")
+    username: str = Field(..., description="Username")
+    role: str = Field(..., description="User role")
+    is_active: bool = Field(default=True, description="Whether the account is active")
+    created_at: Optional[datetime] = Field(default=None, description="Creation timestamp")
+    updated_at: Optional[datetime] = Field(default=None, description="Last update timestamp")
+
+
+class AuditLogResponse(BaseModel):
+    """Audit log item schema."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int = Field(..., description="Unique audit log entry ID")
+    user_id: Optional[int] = Field(default=None, description="User ID if authenticated")
+    username: str = Field(..., description="Username of actor")
+    action: str = Field(..., description="Action performed")
+    endpoint: str = Field(..., description="API endpoint")
+    timestamp: datetime = Field(..., description="Timestamp of action")
+    success: bool = Field(default=True, description="Whether action succeeded")
+    details: Optional[str] = Field(default=None, description="Context details")
+
+
+# ---------------------------------------------------------------------------
+# AI Frame Processing Schemas
+# ---------------------------------------------------------------------------
+
+class AIFrameProcessResponse(BaseModel):
+    """Response payload returned when a live webcam/video frame is analyzed by Member 1 CV & Member 2 ANPR."""
+    status: str = Field("success", description="Processing status")
+    camera_id: str = Field(..., description="Originating camera identifier")
+    processed: bool = Field(True, description="Whether frame was processed by AI pipeline")
+    detections_count: int = Field(0, description="Total detections in this frame")
+    detections: List[Dict[str, Any]] = Field(default_factory=list, description="Raw bounding box detections")
+    events_count: int = Field(0, description="Total analytics events generated from this frame")
+    events: List[Dict[str, Any]] = Field(default_factory=list, description="Emitted Common Event records")
+    correlated_threat: Optional[Dict[str, Any]] = Field(default=None, description="Active correlated threat if formed or updated")
+
+
+# ---------------------------------------------------------------------------
+# Phase 3D Unified Threat Intelligence & Correlation Schemas
+# ---------------------------------------------------------------------------
+
+class ThreatStatus(str, Enum):
+    """Lifecycle status of a correlated threat."""
+    ACTIVE = "ACTIVE"
+    ACKNOWLEDGED = "ACKNOWLEDGED"
+    RESOLVED = "RESOLVED"
+
+
+class ThreatTimelineItem(BaseModel):
+    """Chronological event entry contributing to a correlated threat."""
+    id: Optional[int] = Field(None, description="Database event ID")
+    timestamp: str = Field(..., description="ISO-8601 timestamp")
+    event_type: str = Field(..., description="Surveillance event type")
+    camera_id: str = Field(..., description="Camera identifier")
+    description: str = Field(..., description="Human-readable event summary")
+    confidence: float = Field(..., description="Detection confidence")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Original event metadata")
+
+
+class ThreatResponse(BaseModel):
+    """Summary representation of a correlated threat."""
+    id: int = Field(..., description="Unique database ID")
+    threat_id: str = Field(..., description="Unique threat tracking code")
+    camera_id: str = Field(..., description="Originating camera identifier")
+    severity: ThreatSeverity = Field(..., description="Threat severity level (CRITICAL, HIGH, MEDIUM, LOW)")
+    score: float = Field(..., description="Calculated rule-based threat score (0.0 to 100.0)")
+    title: str = Field(..., description="Short descriptive threat headline")
+    reason: str = Field(..., description="Operational rationale for threat generation")
+    status: ThreatStatus = Field(default=ThreatStatus.ACTIVE, description="Threat lifecycle state")
+    first_event_time: str = Field(..., description="Timestamp of first contributing event")
+    last_event_time: str = Field(..., description="Timestamp of most recent contributing event")
+    event_count: int = Field(1, description="Number of correlated events")
+    threat_metadata: Dict[str, Any] = Field(default_factory=dict, description="Aggregated threat metadata")
+    created_at: Optional[datetime] = Field(default=None, description="Creation timestamp")
+    updated_at: Optional[datetime] = Field(default=None, description="Last update timestamp")
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ThreatDetailResponse(ThreatResponse):
+    """Detailed representation of a correlated threat including all underlying events and timeline."""
+    events: List[EventResponse] = Field(default_factory=list, description="Raw correlated surveillance events")
+    timeline: List[ThreatTimelineItem] = Field(default_factory=list, description="Chronologically ordered threat timeline")
+
+
+class ThreatStatsResponse(BaseModel):
+    """Aggregated operational metrics for correlated threats."""
+    total_threats: int = Field(0, description="Total correlated threats")
+    active_threats: int = Field(0, description="Number of currently ACTIVE threats")
+    critical: int = Field(0, description="CRITICAL severity threats")
+    high: int = Field(0, description="HIGH severity threats")
+    medium: int = Field(0, description="MEDIUM severity threats")
+    low: int = Field(0, description="LOW severity threats")
+    acknowledged: int = Field(0, description="ACKNOWLEDGED threats")
+    resolved: int = Field(0, description="RESOLVED threats")
+
+
+class ThreatStatusUpdate(BaseModel):
+    """Payload for updating a threat's lifecycle status."""
+    status: ThreatStatus = Field(..., description="New threat status (ACTIVE, ACKNOWLEDGED, RESOLVED)")
+    reason: Optional[str] = Field(None, description="Optional operator note or resolution reason")
+
+
+# ---------------------------------------------------------------------------
+# Evidence Schemas
+# ---------------------------------------------------------------------------
+
+class EvidenceCreate(BaseModel):
+    camera_id: str = Field(..., min_length=1)
+    timestamp: str = Field(...)
+    detection_type: str = Field(..., description="person or vehicle")
+    status: str = Field(..., description="UNKNOWN, FLAGGED, or KNOWN")
+    confidence: float = Field(..., ge=0.0, le=1.0)
+    image_path: str = Field(...)
+    crop_image_path: Optional[str] = Field(None)
+    bbox_x1: Optional[float] = Field(None)
+    bbox_y1: Optional[float] = Field(None)
+    bbox_x2: Optional[float] = Field(None)
+    bbox_y2: Optional[float] = Field(None)
+    person_id: Optional[str] = Field(None)
+    vehicle_id: Optional[str] = Field(None)
+    plate_number: Optional[str] = Field(None)
+    reason: Optional[str] = Field(None)
+    event_id: Optional[int] = Field(None)
+
+
+class EvidenceResponse(BaseModel):
+    id: int
+    camera_id: str
+    timestamp: str
+    detection_type: str
+    status: str
+    confidence: float
+    image_path: str
+    crop_image_path: Optional[str] = None
+    bbox_x1: Optional[float] = None
+    bbox_y1: Optional[float] = None
+    bbox_x2: Optional[float] = None
+    bbox_y2: Optional[float] = None
+    person_id: Optional[str] = None
+    vehicle_id: Optional[str] = None
+    plate_number: Optional[str] = None
+    reason: Optional[str] = None
+    event_id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class EvidenceCountResponse(BaseModel):
+    count: int
+
+
+# ---------------------------------------------------------------------------
+# Person & Face Registration Schemas
+# ---------------------------------------------------------------------------
+
+class PersonStatus(str, Enum):
+    KNOWN = "KNOWN"
+    FLAGGED = "FLAGGED"
+
+
+class PersonCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    status: PersonStatus = Field(default=PersonStatus.KNOWN)
+    person_code: Optional[str] = Field(None, max_length=64)
+    notes: Optional[str] = Field(None, max_length=256)
+
+
+class PersonResponse(BaseModel):
+    id: int
+    person_code: str
+    name: str
+    status: str
+    face_image_path: Optional[str] = None
+    notes: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PersonRegisterResponse(BaseModel):
+    status: str
+    person_id: str
+    name: str
+    person_status: str
+    face_image_url: Optional[str] = None
+    message: str
+
+
+# ---------------------------------------------------------------------------
+# Registered Vehicle Schemas
+# ---------------------------------------------------------------------------
+
+class VehicleStatus(str, Enum):
+    KNOWN = "KNOWN"
+    FLAGGED = "FLAGGED"
+    WATCHLIST = "WATCHLIST"
+
+
+class VehicleRegisterRequest(BaseModel):
+    plate_number: str = Field(..., min_length=1, max_length=64)
+    owner_name: Optional[str] = Field(default="", max_length=128)
+    status: VehicleStatus = Field(default=VehicleStatus.KNOWN)
+    notes: Optional[str] = Field(None, max_length=256)
+
+
+class VehicleResponse(BaseModel):
+    id: int
+    plate_number: str
+    owner_name: str
+    status: str
+    notes: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+
+

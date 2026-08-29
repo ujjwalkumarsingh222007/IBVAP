@@ -226,5 +226,27 @@ class YOLOPlateDetector(BasePlateDetector):
                         )
                     )
 
-        logger.debug("YOLOPlateDetector detected %d plates", len(plate_regions))
-        return plate_regions
+        # Sort plate regions by confidence descending and apply IoU Non-Maximum Suppression
+        plate_regions.sort(key=lambda r: r.confidence, reverse=True)
+        filtered_regions: List[PlateRegion] = []
+        for reg in plate_regions:
+            overlap = False
+            for kept in filtered_regions:
+                ix1 = max(reg.x1, kept.x1)
+                iy1 = max(reg.y1, kept.y1)
+                ix2 = min(reg.x2, kept.x2)
+                iy2 = min(reg.y2, kept.y2)
+                if ix2 > ix1 and iy2 > iy1:
+                    intersection = (ix2 - ix1) * (iy2 - iy1)
+                    area_reg = (reg.x2 - reg.x1) * (reg.y2 - reg.y1)
+                    area_kept = (kept.x2 - kept.x1) * (kept.y2 - kept.y1)
+                    union = area_reg + area_kept - intersection
+                    iou = intersection / union if union > 0 else 0
+                    if iou > 0.35:
+                        overlap = True
+                        break
+            if not overlap:
+                filtered_regions.append(reg)
+
+        logger.debug("YOLOPlateDetector detected %d plates after NMS", len(filtered_regions))
+        return filtered_regions

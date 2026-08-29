@@ -116,6 +116,31 @@ def get_me(
 
 
 @router.post(
+    "/logout",
+    status_code=status.HTTP_200_OK,
+    summary="Log out active user session",
+    description="Terminates session and records audit logout event.",
+)
+def logout(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Log out active user and record security audit log.
+    """
+    log_audit_action(
+        db=db,
+        username=current_user.username,
+        action="LOGOUT",
+        endpoint="/api/v1/auth/logout",
+        success=True,
+        user_id=current_user.id,
+        details=f"User {current_user.username} logged out",
+    )
+    return {"status": "success", "message": f"Successfully logged out {current_user.username}"}
+
+
+@router.post(
     "/users",
     response_model=UserResponse,
     status_code=status.HTTP_201_CREATED,

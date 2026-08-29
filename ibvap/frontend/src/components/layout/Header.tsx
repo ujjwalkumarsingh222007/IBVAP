@@ -8,6 +8,7 @@ interface HeaderProps {
   subtitle?: string;
   onRefresh?: () => void;
   isRefreshing?: boolean;
+  action?: React.ReactNode;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -15,6 +16,7 @@ export const Header: React.FC<HeaderProps> = ({
   subtitle = 'Real-Time Border Video Analytics Platform',
   onRefresh,
   isRefreshing = false,
+  action,
 }) => {
   const [timeStr, setTimeStr] = useState<string>('');
   const { user, logout } = useAuth();
@@ -42,6 +44,7 @@ export const Header: React.FC<HeaderProps> = ({
 
       {/* Controls & Status */}
       <div className="flex items-center gap-3 sm:gap-4 shrink-0">
+        {action && <div>{action}</div>}
         {/* Reusable System Connection Status Indicator */}
         <div className="hidden sm:block">
           <ConnectionStatusBadge showDetails />

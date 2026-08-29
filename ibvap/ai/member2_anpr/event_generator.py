@@ -50,6 +50,7 @@ class ANPREventGenerator:
         plate_confidence: float,
         timestamp: Optional[str] = None,
         vehicle_id: Optional[str] = None,
+        bbox: Optional[Any] = None,
     ) -> IBVAPEvent:
         """
         Build an IBVAPEvent from ANPR component results.
@@ -68,6 +69,8 @@ class ANPREventGenerator:
             ISO-8601 string. Auto-generated if None or empty.
         vehicle_id:
             Optional vehicle ID from tracking/Member 1.
+        bbox:
+            Optional plate bounding box (PlateRegion, dict, or list [x1, y1, x2, y2]).
         """
         if not camera_id or not camera_id.strip():
             raise ValueError("camera_id must be a non-empty string")
@@ -88,6 +91,15 @@ class ANPREventGenerator:
                 camera_id, recognition.plate_number, overall_confidence,
             )
 
+        bbox_coords = None
+        if bbox is not None:
+            if hasattr(bbox, "x1") and hasattr(bbox, "y1") and hasattr(bbox, "x2") and hasattr(bbox, "y2"):
+                bbox_coords = [int(bbox.x1), int(bbox.y1), int(bbox.x2), int(bbox.y2)]
+            elif isinstance(bbox, dict) and "x1" in bbox:
+                bbox_coords = [int(bbox["x1"]), int(bbox["y1"]), int(bbox["x2"]), int(bbox["y2"])]
+            elif isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+                bbox_coords = [int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])]
+
         metadata = {
             "plate_number": recognition.plate_number,
             "raw_ocr_text": recognition.raw_text,
@@ -97,6 +109,9 @@ class ANPREventGenerator:
             "watchlist_match": watchlist.is_match,
             "validation_passed": recognition.validation_passed,
         }
+
+        if bbox_coords is not None:
+            metadata["bbox"] = bbox_coords
 
         if recognition.validation_reason:
             metadata["validation_reason"] = recognition.validation_reason

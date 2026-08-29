@@ -141,11 +141,11 @@ export const Login: React.FC = () => {
           </Button>
         </form>
 
-        {/* Quick-Fill Evaluator & Demo Accounts */}
+        {/* Role Presets */}
         <div className="pt-4 border-t border-surface-border space-y-2">
           <div className="flex items-center justify-between text-[11px] text-slate-400">
-            <span className="font-semibold uppercase tracking-wider">Demo Quick Access:</span>
-            <span className="text-slate-500 text-[10px]">Select Role</span>
+            <span className="font-semibold uppercase tracking-wider">Role Credentials:</span>
+            <span className="text-slate-500 text-[10px]">Quick Select</span>
           </div>
 
           <div className="grid grid-cols-3 gap-2">

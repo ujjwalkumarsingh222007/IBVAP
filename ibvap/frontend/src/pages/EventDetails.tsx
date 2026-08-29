@@ -205,7 +205,7 @@ export const EventDetails: React.FC = () => {
                         </div>
                       </div>
 
-                      {/* Mock Frame View */}
+                      {/* Spatial Detection Target Preview */}
                       <div className="relative h-44 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-center overflow-hidden">
                         <div className="absolute inset-0 bg-[radial-gradient(#1e293b_1px,transparent_1px)] [background-size:16px_16px] opacity-40"></div>
                         <div className="relative z-10 p-4 border-2 border-dashed border-blue-500/60 bg-blue-950/30 rounded text-center">

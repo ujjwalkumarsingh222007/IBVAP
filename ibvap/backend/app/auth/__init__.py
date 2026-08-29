@@ -8,10 +8,12 @@ from app.auth.dependencies import (
     log_audit_action,
     require_admin,
     require_operator,
+    require_role,
     require_viewer,
 )
-from app.auth.routes import router as auth_router
-from app.auth.schemas import (
+from app.routes.auth import router as auth_router
+from app.auth.service import AuthService
+from app.schemas import (
     AuditLogResponse,
     LoginRequest,
     TokenResponse,
@@ -28,10 +30,12 @@ from app.auth.security import (
 
 __all__ = [
     "auth_router",
+    "AuthService",
     "get_current_user",
     "get_current_user_optional",
     "require_admin",
     "require_operator",
+    "require_role",
     "require_viewer",
     "log_audit_action",
     "hash_password",

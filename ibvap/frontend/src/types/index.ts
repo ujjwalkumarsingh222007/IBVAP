@@ -218,3 +218,174 @@ export interface AnalyticsQueryParams {
   event_type?: string;
   interval?: 'hourly' | 'daily';
 }
+
+// ---------------------------------------------------------------------------
+// Phase 3C Audit & Demo Types
+// ---------------------------------------------------------------------------
+
+export interface AuditLog {
+  id: number;
+  user_id?: number | null;
+  username: string;
+  action: string;
+  endpoint: string;
+  timestamp: string;
+  success: boolean;
+  details?: string | null;
+}
+
+export interface DemoResetResponse {
+  status: string;
+  message: string;
+  events_cleared: number;
+  cameras_restored: number;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3C Live AI Processing Types
+// ---------------------------------------------------------------------------
+
+export interface AIDetectionItem {
+  class_name: string;
+  confidence: number;
+  bbox: { x1: number; y1: number; x2: number; y2: number };
+  track_id?: number | null;
+  plate_number?: string | null;
+  raw_ocr_text?: string | null;
+  plate_confidence?: number | null;
+  ocr_confidence?: number | null;
+  watchlist_match?: boolean | null;
+  watchlist_status?: string | null;
+  watchlist_reason?: string | null;
+  is_known?: boolean;
+  is_flagged?: boolean;
+  person_name?: string | null;
+  person_id?: string | null;
+  status?: string | null;
+  face_similarity?: number | null;
+}
+
+export interface AIFrameProcessResponse {
+  status: string;
+  camera_id: string;
+  processed: boolean;
+  detections_count: number;
+  detections: AIDetectionItem[];
+  events_count: number;
+  events: SurveillanceEvent[];
+  correlated_threat?: {
+    id: number;
+    threat_id: string;
+    camera_id: string;
+    severity: string;
+    score: number;
+    title: string;
+    reason: string;
+    status: string;
+    first_event_time: string;
+    last_event_time: string;
+    event_count: number;
+  } | null;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3D Threat Intelligence & Correlation Types
+// ---------------------------------------------------------------------------
+
+export type ThreatStatus = 'ACTIVE' | 'ACKNOWLEDGED' | 'RESOLVED';
+
+export interface ThreatTimelineItem {
+  id?: number;
+  timestamp: string;
+  event_type: string;
+  camera_id: string;
+  description: string;
+  confidence: number;
+  metadata: EventMetadata;
+}
+
+export interface Threat {
+  id: number;
+  threat_id: string;
+  camera_id: string;
+  severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
+  score: number;
+  title: string;
+  reason: string;
+  status: ThreatStatus;
+  first_event_time: string;
+  last_event_time: string;
+  event_count: number;
+  threat_metadata?: Record<string, unknown>;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface ThreatDetail extends Threat {
+  events: SurveillanceEvent[];
+  timeline: ThreatTimelineItem[];
+}
+
+export interface ThreatStats {
+  total_threats: number;
+  active_threats: number;
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  acknowledged: number;
+  resolved: number;
+}
+
+export interface ThreatStatusUpdateInput {
+  status: ThreatStatus;
+  reason?: string;
+}
+
+export interface RegisteredPerson {
+  id: string;
+  name: string;
+  photoUrl?: string;
+  status: 'KNOWN' | 'FLAGGED';
+  notes?: string;
+  created_at: string;
+}
+
+export interface RegisteredVehicle {
+  id: string;
+  plate_number: string;
+  owner_name: string;
+  status: 'REGISTERED' | 'WATCHLIST';
+  notes?: string;
+  created_at: string;
+}
+
+export interface EvidenceItem {
+  id: number;
+  camera_id: string;
+  timestamp: string;
+  detection_type: 'person' | 'vehicle' | string;
+  status: 'UNKNOWN' | 'FLAGGED' | 'KNOWN' | string;
+  confidence: number;
+  image_path: string;
+  crop_image_path?: string | null;
+  bbox_x1?: number | null;
+  bbox_y1?: number | null;
+  bbox_x2?: number | null;
+  bbox_y2?: number | null;
+  person_id?: string | null;
+  vehicle_id?: string | null;
+  plate_number?: string | null;
+  reason?: string | null;
+  event_id?: number | null;
+  created_at?: string | null;
+}
+
+export interface EvidenceFilterParams {
+  limit?: number;
+  offset?: number;
+  camera_id?: string;
+  detection_type?: string;
+  status?: string;
+}
+

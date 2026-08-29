@@ -74,7 +74,7 @@ class ANPRPipeline:
             self._suppressor = None
 
         logger.info(
-            "ANPRPipeline initialised -- detector=%s, ocr=%s, suppression=%s",
+            "[ANPR DEBUG] pipeline initialized -- detector=%s, ocr=%s, suppression=%s",
             type(self._detector).__name__,
             type(self._ocr).__name__,
             "ENABLED" if self._suppressor and self._suppressor.enabled else "DISABLED",
@@ -108,19 +108,30 @@ class ANPRPipeline:
         """
         validated_camera_id, frame_error = self._validate_inputs(frame, camera_id)
         if frame_error:
+            logger.warning("[ANPR DEBUG] frame validation error: %s", frame_error)
             return [ANPRResult(error=frame_error, vehicle_id=vehicle_id)]
 
         ts = timestamp or datetime.now(timezone.utc).isoformat()
+        logger.info(
+            "[ANPR DEBUG] frame shape=%s, camera_id=%s, timestamp=%s",
+            frame.shape if isinstance(frame, np.ndarray) else None,
+            validated_camera_id,
+            ts,
+        )
+        logger.info("[ANPR DEBUG] detector type=%s", type(self._detector).__name__)
+
         results: List[ANPRResult] = []
 
         try:
             regions: List[PlateRegion] = self._detector.detect(frame)
         except Exception as exc:
-            logger.error("Plate detector failed: %s", exc, exc_info=True)
+            logger.error("[ANPR DEBUG] Plate detector failed: %s", exc, exc_info=True)
             return [ANPRResult(error=f"Plate detector error: {exc}", vehicle_id=vehicle_id)]
 
+        logger.info("[ANPR DEBUG] plate regions count=%d, regions=%s", len(regions), regions)
+
         if not regions:
-            logger.debug("No plate regions detected in frame (camera=%s)", validated_camera_id)
+            logger.debug("[ANPR DEBUG] No plate regions detected in frame (camera=%s)", validated_camera_id)
             return []
 
         for region in regions:
@@ -160,35 +171,45 @@ class ANPRPipeline:
         try:
             plate_img = self._crop_plate(frame, region)
         except Exception as exc:
-            logger.warning("Failed to crop plate region %s: %s", region, exc)
+            logger.warning("[ANPR DEBUG] Failed to crop plate region %s: %s", region, exc)
             return ANPRResult(error=f"Crop error: {exc}", vehicle_id=vehicle_id)
 
         try:
             ocr_result = self._ocr.read(plate_img)
         except Exception as exc:
-            logger.warning("OCR failed for region %s: %s", region, exc)
+            logger.warning("[ANPR DEBUG] OCR failed for region %s: %s", region, exc)
             return ANPRResult(error=f"OCR error: {exc}", vehicle_id=vehicle_id)
 
+        logger.info("[ANPR DEBUG] OCR text=%r, confidence=%.4f", ocr_result.raw_text, ocr_result.confidence)
+
         if not ocr_result.raw_text.strip():
-            logger.warning("OCR returned empty text for region %s", region)
+            logger.warning("[ANPR DEBUG] OCR returned empty text for region %s", region)
             return ANPRResult(error="OCR returned empty text", vehicle_id=vehicle_id)
 
         try:
             recognition = self._recognizer.recognise(ocr_result)
         except Exception as exc:
-            logger.warning("Recognition failed: %s", exc)
+            logger.warning("[ANPR DEBUG] Recognition failed: %s", exc)
             return ANPRResult(error=f"Recognition error: {exc}", vehicle_id=vehicle_id)
 
         if recognition is None:
+            logger.warning("[ANPR DEBUG] Recognition rejected OCR output: %r", ocr_result.raw_text)
             return ANPRResult(
                 error="Recognition rejected OCR output (low confidence or invalid format)",
                 vehicle_id=vehicle_id,
             )
 
+        logger.info(
+            "[ANPR DEBUG] recognized plate=%r, valid=%s, reason=%s",
+            recognition.plate_number,
+            recognition.validation_passed,
+            recognition.validation_reason,
+        )
+
         try:
             watchlist_result = self._watchlist.match(recognition.plate_number)
         except Exception as exc:
-            logger.warning("Watchlist lookup failed: %s", exc)
+            logger.warning("[ANPR DEBUG] Watchlist lookup failed: %s", exc)
             watchlist_result = None
 
         # Check duplicate event suppression
@@ -199,6 +220,15 @@ class ANPRPipeline:
                 plate_number=recognition.plate_number,
             )
 
+        logger.info(
+            "[ANPR DEBUG] duplicate_suppressed=%s for plate=%s on camera=%s",
+            is_suppressed,
+            recognition.plate_number,
+            camera_id,
+        )
+
+        bbox_dict = {"x1": region.x1, "y1": region.y1, "x2": region.x2, "y2": region.y2}
+
         try:
             event = self._event_gen.generate(
                 camera_id=camera_id,
@@ -207,17 +237,25 @@ class ANPRPipeline:
                 plate_confidence=region.confidence,
                 timestamp=timestamp,
                 vehicle_id=vehicle_id,
+                bbox=region,
             )
             if is_suppressed and event is not None:
                 event.metadata["duplicate_suppressed"] = True
         except Exception as exc:
-            logger.error("Event generation failed: %s", exc, exc_info=True)
+            logger.error("[ANPR DEBUG] Event generation failed: %s", exc, exc_info=True)
             return ANPRResult(error=f"Event generation error: {exc}", vehicle_id=vehicle_id)
+
+        logger.info(
+            "[ANPR DEBUG] event_type=%s, watchlist_match=%s",
+            event.event_type if event else None,
+            watchlist_result.is_match if watchlist_result else False,
+        )
 
         return ANPRResult(
             plate_number=recognition.plate_number,
             plate_confidence=region.confidence,
             ocr_confidence=recognition.confidence,
+            bbox=bbox_dict,
             vehicle_id=vehicle_id,
             watchlist_match=watchlist_result.is_match if watchlist_result else False,
             watchlist_status=watchlist_result.status if watchlist_result else None,

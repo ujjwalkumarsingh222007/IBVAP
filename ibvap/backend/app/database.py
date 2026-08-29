@@ -15,14 +15,7 @@ from typing import Generator
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 
-# Base directory of the backend package
-BASE_DIR = Path(__file__).resolve().parent.parent
-
-# Default to SQLite located at backend/ibvap.db
-DEFAULT_DB_FILE = BASE_DIR / "ibvap.db"
-DEFAULT_DB_URL = f"sqlite:///{DEFAULT_DB_FILE.as_posix()}"
-
-DATABASE_URL = os.getenv("DATABASE_URL", DEFAULT_DB_URL)
+from app.config import DATABASE_URL
 
 # SQLite requires check_same_thread=False for multi-threaded FastAPI access
 connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
