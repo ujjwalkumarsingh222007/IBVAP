@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import init_db
+from app.auth import auth_router
 from app.routes import (
     cameras_router,
     dashboard_router,
@@ -21,7 +22,7 @@ from app.routes import (
 async def lifespan(app: FastAPI):
     """
     Application lifespan handler. Automatically initializes database tables
-    on startup.
+    and seeds default administrative users on startup.
     """
     init_db()
     yield
@@ -33,7 +34,7 @@ app = FastAPI(
     description=(
         "Intelligent Border Video Analytics Platform (IBVAP) Core Backend API. "
         "Receives, validates, and persists common events from AI modules (CV, ANPR), "
-        "manages cameras, and provides real-time surveillance analytics for the dashboard."
+        "manages cameras, provides real-time surveillance analytics, and enforces role-based access control."
     ),
     lifespan=lifespan,
     docs_url="/docs",
@@ -54,6 +55,7 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 # Routers
 # ---------------------------------------------------------------------------
+app.include_router(auth_router)
 app.include_router(events_router)
 app.include_router(dashboard_router)
 app.include_router(cameras_router)

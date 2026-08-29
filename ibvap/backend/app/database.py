@@ -56,9 +56,20 @@ def get_db() -> Generator[Session, None, None]:
 
 def init_db() -> None:
     """
-    Create database tables defined in models.py if they do not already exist.
+    Create database tables defined in models.py if they do not already exist,
+    and initialize default admin/operator/viewer accounts safely.
     """
     # Import models here to ensure they are registered with Base metadata
     from app import models  # noqa: F401
+    from app.auth.init_admin import init_default_users
 
     Base.metadata.create_all(bind=engine)
+
+    # Initialize users safely
+    db = SessionLocal()
+    try:
+        init_default_users(db)
+    except Exception:
+        db.rollback()
+    finally:
+        db.close()
