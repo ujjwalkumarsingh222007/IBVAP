@@ -1,33 +1,28 @@
 import apiClient from './apiClient';
-import { Camera, CameraCreateInput, CameraUpdateInput } from '../types';
+import { Camera, CameraCreatePayload, CameraUpdatePayload } from '../types';
 
 export const cameraApi = {
   getCameras: async (): Promise<Camera[]> => {
-    const response = await apiClient.get<Camera[]>('/api/v1/cameras');
+    const response = await apiClient.get<Camera[]>('/cameras');
     return response.data;
   },
 
-  getCameraById: async (cameraId: string): Promise<Camera> => {
-    const response = await apiClient.get<Camera>(`/api/v1/cameras/${encodeURIComponent(cameraId)}`);
+  getCamera: async (cameraId: string): Promise<Camera> => {
+    const response = await apiClient.get<Camera>(`/cameras/${encodeURIComponent(cameraId)}`);
     return response.data;
   },
 
-  createCamera: async (data: CameraCreateInput): Promise<Camera> => {
-    const response = await apiClient.post<Camera>('/api/v1/cameras', data);
+  createCamera: async (payload: CameraCreatePayload): Promise<Camera> => {
+    const response = await apiClient.post<Camera>('/cameras', payload);
     return response.data;
   },
 
-  updateCamera: async (cameraId: string, data: CameraUpdateInput): Promise<Camera> => {
-    const response = await apiClient.put<Camera>(
-      `/api/v1/cameras/${encodeURIComponent(cameraId)}`,
-      data
-    );
+  updateCamera: async (cameraId: string, payload: CameraUpdatePayload): Promise<Camera> => {
+    const response = await apiClient.put<Camera>(`/cameras/${encodeURIComponent(cameraId)}`, payload);
     return response.data;
   },
 
   deleteCamera: async (cameraId: string): Promise<void> => {
-    await apiClient.delete(`/api/v1/cameras/${encodeURIComponent(cameraId)}`);
+    await apiClient.delete(`/cameras/${encodeURIComponent(cameraId)}`);
   },
 };
-
-export default cameraApi;

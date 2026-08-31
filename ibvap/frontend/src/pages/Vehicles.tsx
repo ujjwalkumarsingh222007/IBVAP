@@ -1,67 +1,33 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import {
-  Car,
-  Plus,
-  Trash2,
-  Search,
-  CheckCircle2,
-  Flame,
-  X,
-  RefreshCw,
-} from 'lucide-react';
-import { Header } from '../components/layout/Header';
-import { Button } from '../components/common/Button';
-import { EmptyState } from '../components/common/EmptyState';
-import { CardSkeleton } from '../components/common/LoadingSkeleton';
-import { ErrorMessage } from '../components/common/ErrorMessage';
-import { vehiclesApi, VehicleItem } from '../api/vehiclesApi';
-import { registryStorage } from '../services/registryStorage';
-import { formatApiError } from '../api';
+import React, { useEffect, useState, useCallback } from 'react';
+import { Plus, Car, RefreshCw, CheckCircle2, ShieldAlert, Trash2, Search } from 'lucide-react';
+import { vehicleApi } from '../api/vehicleApi';
+import { Vehicle } from '../types';
+import { RegisterVehicleModal } from '../components/vehicles/RegisterVehicleModal';
+import { EditVehicleModal } from '../components/vehicles/EditVehicleModal';
+import { ViewVehicleModal } from '../components/vehicles/ViewVehicleModal';
+import { formatTimestamp } from '../utils/formatters';
 
 export const Vehicles: React.FC = () => {
-  const [vehicles, setVehicles] = useState<VehicleItem[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [error, setError] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState<string>('');
-  const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
-  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
-  const [isDeleting, setIsDeleting] = useState<number | null>(null);
+  const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [isRegisterModalOpen, setIsRegisterModalOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'ALL' | 'KNOWN' | 'FLAGGED'>('ALL');
 
-  // Form state
-  const [formPlate, setFormPlate] = useState<string>('');
-  const [formOwner, setFormOwner] = useState<string>('');
-  const [formStatus, setFormStatus] = useState<'KNOWN' | 'WATCHLIST'>('KNOWN');
-  const [formNotes, setFormNotes] = useState<string>('');
-  const [formError, setFormError] = useState<string | null>(null);
+  // Selection state
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+
+  // Modal states
+  const [viewVehicle, setViewVehicle] = useState<Vehicle | null>(null);
+  const [editVehicle, setEditVehicle] = useState<Vehicle | null>(null);
 
   const fetchVehicles = useCallback(async () => {
     try {
-      const data = await vehiclesApi.getVehicles();
+      setLoading(true);
+      const data = await vehicleApi.getVehicles();
       setVehicles(data);
-      setError(null);
-
-      // Sync with clientside storage
-      data.forEach((v) => {
-        registryStorage.addVehicle({
-          id: `VEH-${v.plate_number}`,
-          plate_number: v.plate_number,
-          owner_name: v.owner_name,
-          status: v.status === 'WATCHLIST' || v.status === 'FLAGGED' ? 'WATCHLIST' : 'REGISTERED',
-          notes: v.notes,
-        });
-      });
-    } catch (err) {
-      setError(formatApiError(err));
-      // Local fallback
-      const local = registryStorage.getVehicles().map((lv, idx) => ({
-        id: idx + 1,
-        plate_number: lv.plate_number,
-        owner_name: lv.owner_name,
-        status: lv.status === 'WATCHLIST' ? 'WATCHLIST' : 'KNOWN',
-        notes: lv.notes,
-        created_at: lv.created_at,
-      }));
-      setVehicles(local as VehicleItem[]);
+    } catch {
+      // ignore
     } finally {
       setLoading(false);
     }
@@ -71,190 +37,333 @@ export const Vehicles: React.FC = () => {
     fetchVehicles();
   }, [fetchVehicles]);
 
-  const handleSaveVehicle = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setFormError(null);
-
-    const cleanPlate = formPlate.replace(/\s+/g, '').toUpperCase();
-    if (!cleanPlate) {
-      setFormError('Please enter a license plate number.');
-      return;
-    }
-
-    setIsSubmitting(true);
+  const handleDeleteVehicle = async (id: number) => {
+    if (!window.confirm('Are you sure you want to delete this vehicle registration?')) return;
     try {
-      await vehiclesApi.registerVehicle({
-        plate_number: cleanPlate,
-        owner_name: formOwner.trim(),
-        status: formStatus,
-        notes: formNotes.trim() || undefined,
+      await vehicleApi.deleteVehicle(id);
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
       });
-
-      setFormPlate('');
-      setFormOwner('');
-      setFormStatus('KNOWN');
-      setFormNotes('');
-      setIsAddModalOpen(false);
-      await fetchVehicles();
-    } catch (err) {
-      setFormError(formatApiError(err));
-    } finally {
-      setIsSubmitting(false);
+      fetchVehicles();
+    } catch (err: any) {
+      alert(err.message || 'Failed to delete vehicle');
     }
   };
 
-  const handleDelete = async (id: number, plate: string) => {
-    if (!window.confirm(`Remove registered vehicle '${plate}'?`)) return;
-    setIsDeleting(id);
+  const handleToggleSelect = (id: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const handleSelectAll = () => {
+    if (selectedIds.size === filteredVehicles.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filteredVehicles.map((v) => v.id)));
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedIds.size === 0) return;
+    const confirmMsg = `Are you sure you want to delete ${selectedIds.size} selected vehicle(s)? This action cannot be undone.`;
+    if (!window.confirm(confirmMsg)) return;
+
     try {
-      await vehiclesApi.deleteVehicle(id);
-      registryStorage.deleteVehicle(plate);
+      setLoading(true);
+      await vehicleApi.bulkDeleteVehicles(Array.from(selectedIds));
+      setSelectedIds(new Set());
       await fetchVehicles();
-    } catch (err) {
-      alert(`Failed to delete: ${formatApiError(err)}`);
+    } catch (err: any) {
+      alert(err.message || 'Failed to delete selected vehicles');
     } finally {
-      setIsDeleting(null);
+      setLoading(false);
+    }
+  };
+
+  const handleBulkStatusChange = async (newStatus: 'KNOWN' | 'FLAGGED' | 'WATCHLIST') => {
+    if (selectedIds.size === 0) return;
+    try {
+      setLoading(true);
+      await vehicleApi.bulkUpdateVehicleStatus(Array.from(selectedIds), newStatus);
+      setSelectedIds(new Set());
+      await fetchVehicles();
+    } catch (err: any) {
+      alert(err.message || 'Failed to update status for selected vehicles');
+    } finally {
+      setLoading(false);
     }
   };
 
   const filteredVehicles = vehicles.filter((v) => {
-    if (!searchQuery.trim()) return true;
-    const q = searchQuery.toLowerCase();
-    return (
-      v.plate_number.toLowerCase().includes(q) ||
-      (v.owner_name && v.owner_name.toLowerCase().includes(q))
-    );
+    const matchesSearch =
+      v.plate_number.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      v.owner_name.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesStatus =
+      statusFilter === 'ALL' ||
+      (statusFilter === 'KNOWN' && v.status === 'KNOWN') ||
+      (statusFilter === 'FLAGGED' && (v.status === 'FLAGGED' || v.status === 'WATCHLIST'));
+    return matchesSearch && matchesStatus;
   });
 
+  const isAllSelected = filteredVehicles.length > 0 && selectedIds.size === filteredVehicles.length;
+  const knownCount = vehicles.filter((v) => v.status === 'KNOWN').length;
+  const flaggedCount = vehicles.filter((v) => v.status === 'FLAGGED' || v.status === 'WATCHLIST').length;
+
   return (
-    <div className="space-y-6 font-mono">
-      <Header
-        title="Vehicles"
-        subtitle="Manage authorized vehicles and security watchlist targets"
-        onRefresh={fetchVehicles}
-        isRefreshing={loading}
-        action={
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={() => setIsAddModalOpen(true)}
-            icon={<Plus className="w-4 h-4" />}
-          >
-            Add Vehicle
-          </Button>
-        }
-      />
-
-      {/* Filter / Search Bar */}
-      {vehicles.length > 0 && (
-        <div className="bg-surface border border-surface-border rounded-xl p-3 flex items-center justify-between shadow-sm">
-          <div className="relative flex-1 max-w-sm">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              placeholder="Search plate or owner..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-slate-900 border border-slate-800 rounded-lg pl-9 pr-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-blue-500 font-mono"
-            />
+    <div className="space-y-4 font-mono pb-12">
+      {/* 1. Header & Quick Actions */}
+      <div className="bg-surface border border-surface-border p-4 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-tactical">
+        <div>
+          <div className="flex items-center gap-2">
+            <h1 className="text-base font-bold text-white tracking-wide uppercase">
+              ANPR / NUMBER PLATE REGISTRY
+            </h1>
+            <span className="text-xs px-2 py-0.5 rounded bg-surface-elevated text-tactical-blue border border-surface-border font-bold">
+              {vehicles.length} VEHICLES
+            </span>
           </div>
-          <span className="text-xs text-slate-400 font-mono">
-            Total: <span className="text-white font-bold">{vehicles.length}</span> vehicles
-          </span>
+          <p className="text-[11px] text-tactical-slate mt-0.5">
+            Authorized vehicle fleet whitelist, OCR normalization patterns, and flagged watchlist.
+          </p>
         </div>
-      )}
 
-      {error && (
-        <ErrorMessage
-          title="Vehicle Registry Offline"
-          message={error}
-          onRetry={fetchVehicles}
-        />
-      )}
+        <div className="flex items-center gap-2.5">
+          <button
+            onClick={fetchVehicles}
+            className="p-2 rounded bg-surface-subtle hover:bg-surface-elevated text-slate-300 transition-colors border border-surface-border"
+            title="Refresh database"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+          </button>
+          <button
+            onClick={() => setIsRegisterModalOpen(true)}
+            className="px-3.5 py-1.5 rounded bg-tactical-blue hover:bg-blue-600 text-white text-xs font-semibold flex items-center gap-1.5 transition-all shadow-tactical cursor-pointer"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            Register License Plate
+          </button>
+        </div>
+      </div>
 
-      {/* Vehicles Table / Cards */}
-      {loading && vehicles.length === 0 ? (
-        <CardSkeleton count={4} />
-      ) : vehicles.length === 0 ? (
-        <EmptyState
-          title="No Registered Vehicles"
-          description="Add a known or watchlist license plate to enable automatic vehicle classification."
-          action={
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={() => setIsAddModalOpen(true)}
-              icon={<Plus className="w-4 h-4" />}
+      {/* 2. Status Metric Counters */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="p-3 rounded-lg bg-surface border border-surface-border flex items-center justify-between">
+          <div>
+            <div className="text-[10px] text-tactical-slate uppercase font-bold">TOTAL REGISTERED</div>
+            <div className="text-xl font-bold text-white mt-0.5">{vehicles.length}</div>
+          </div>
+          <div className="w-8 h-8 rounded bg-surface-elevated border border-surface-border flex items-center justify-center text-tactical-blue">
+            <Car className="w-4 h-4" />
+          </div>
+        </div>
+
+        <div className="p-3 rounded-lg bg-surface border border-surface-border flex items-center justify-between">
+          <div>
+            <div className="text-[10px] text-tactical-slate uppercase font-bold">AUTHORIZED (KNOWN)</div>
+            <div className="text-xl font-bold text-emerald-400 mt-0.5">{knownCount}</div>
+          </div>
+          <div className="w-8 h-8 rounded bg-surface-elevated border border-surface-border flex items-center justify-center text-emerald-400">
+            <CheckCircle2 className="w-4 h-4" />
+          </div>
+        </div>
+
+        <div className="p-3 rounded-lg bg-surface border border-surface-border flex items-center justify-between">
+          <div>
+            <div className="text-[10px] text-tactical-slate uppercase font-bold">WATCHLIST (FLAGGED)</div>
+            <div className="text-xl font-bold text-red-400 mt-0.5">{flaggedCount}</div>
+          </div>
+          <div className="w-8 h-8 rounded bg-surface-elevated border border-surface-border flex items-center justify-center text-red-400">
+            <ShieldAlert className="w-4 h-4" />
+          </div>
+        </div>
+      </div>
+
+      {/* 3. Search & Filters */}
+      <div className="p-3 rounded-lg bg-surface border border-surface-border flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-tactical">
+        <div className="flex-1 max-w-md relative">
+          <Search className="w-3.5 h-3.5 text-tactical-slate absolute left-3 top-1/2 -translate-y-1/2" />
+          <input
+            type="text"
+            placeholder="Search by license plate or owner (e.g. UP19EQ1001)..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full pl-8 pr-3 py-1.5 rounded bg-surface-subtle border border-surface-border text-white text-xs placeholder:text-slate-600 focus:outline-none focus:border-tactical-blue font-mono"
+          />
+        </div>
+
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] text-tactical-slate uppercase font-bold">STATUS:</span>
+          <div className="flex items-center gap-1 bg-surface-subtle border border-surface-border p-1 rounded">
+            {(['ALL', 'KNOWN', 'FLAGGED'] as const).map((st) => (
+              <button
+                key={st}
+                onClick={() => setStatusFilter(st)}
+                className={`px-2 py-0.5 rounded text-[10px] font-bold transition-colors ${
+                  statusFilter === st
+                    ? 'bg-tactical-blue text-white'
+                    : 'text-tactical-slate hover:text-white'
+                }`}
+              >
+                {st}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* 4. Bulk Actions Bar */}
+      {selectedIds.size > 0 && (
+        <div className="p-2.5 rounded-lg bg-surface-elevated border border-tactical-blue flex items-center justify-between text-xs animate-fade-in shadow-tactical">
+          <div className="flex items-center gap-2 text-slate-200">
+            <span className="font-bold text-tactical-blue">{selectedIds.size}</span>
+            <span>VEHICLES SELECTED</span>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => handleBulkStatusChange('KNOWN')}
+              className="px-2.5 py-1 rounded bg-emerald-950/40 border border-emerald-500/50 text-emerald-300 hover:bg-emerald-900/60 text-[11px] font-bold"
             >
-              Add Vehicle
-            </Button>
-          }
-        />
-      ) : filteredVehicles.length === 0 ? (
-        <div className="p-8 text-center bg-surface border border-surface-border rounded-xl text-slate-400 text-xs">
-          No vehicles match your search.
+              Mark KNOWN
+            </button>
+            <button
+              onClick={() => handleBulkStatusChange('FLAGGED')}
+              className="px-2.5 py-1 rounded bg-red-950/40 border border-red-500/50 text-red-300 hover:bg-red-900/60 text-[11px] font-bold"
+            >
+              Mark FLAGGED
+            </button>
+            <button
+              onClick={handleBulkDelete}
+              className="px-2.5 py-1 rounded bg-red-600 hover:bg-red-500 text-white text-[11px] font-bold flex items-center gap-1"
+            >
+              <Trash2 className="w-3 h-3" />
+              Delete Selected
+            </button>
+          </div>
         </div>
-      ) : (
-        <div className="bg-surface border border-surface-border rounded-xl overflow-hidden shadow">
+      )}
+
+      {/* 5. Dense Tactical Vehicles Table */}
+      <div className="bg-surface border border-surface-border rounded-lg overflow-hidden shadow-tactical">
+        {filteredVehicles.length === 0 ? (
+          <div className="p-12 text-center text-tactical-slate">
+            <Car className="w-8 h-8 mx-auto opacity-40 mb-2" />
+            <div className="text-xs font-semibold">NO MATCHING VEHICLES FOUND</div>
+            <div className="text-[10px] text-tactical-slate/70 mt-0.5">Try adjusting search parameters.</div>
+          </div>
+        ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs font-mono">
+            <table className="w-full text-left text-xs">
               <thead>
-                <tr className="border-b border-surface-border text-slate-400 uppercase tracking-wider text-[11px] bg-slate-950/40">
-                  <th className="py-3.5 pl-4">License Plate</th>
-                  <th className="py-3.5">Owner / Description</th>
-                  <th className="py-3.5">Status</th>
-                  <th className="py-3.5">Registered On</th>
-                  <th className="py-3.5 text-right pr-4">Actions</th>
+                <tr className="border-b border-surface-border bg-surface-subtle text-tactical-slate text-[10px] uppercase">
+                  <th className="py-2.5 px-3 w-8">
+                    <input
+                      type="checkbox"
+                      checked={isAllSelected}
+                      onChange={handleSelectAll}
+                      className="rounded border-surface-border bg-surface text-tactical-blue focus:ring-0 cursor-pointer"
+                    />
+                  </th>
+                  <th className="py-2.5 px-3">LICENSE PLATE</th>
+                  <th className="py-2.5 px-3">REGISTERED OWNER</th>
+                  <th className="py-2.5 px-3">STATUS</th>
+                  <th className="py-2.5 px-3">DESIGNATION / NOTES</th>
+                  <th className="py-2.5 px-3">REGISTERED</th>
+                  <th className="py-2.5 px-3 text-right">ACTIONS</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-surface-border/40">
-                {filteredVehicles.map((veh) => {
-                  const isWatchlist = veh.status === 'WATCHLIST' || veh.status === 'FLAGGED';
+              <tbody className="divide-y divide-surface-border/60">
+                {filteredVehicles.map((vehicle) => {
+                  const isSelected = selectedIds.has(vehicle.id);
+                  const isKnown = vehicle.status === 'KNOWN';
 
                   return (
-                    <tr key={veh.id} className="hover:bg-slate-800/40 transition-colors">
-                      <td className="py-3.5 pl-4">
-                        <div className="flex items-center gap-3">
-                          <div className="p-2 rounded-lg bg-slate-900 border border-slate-700 text-slate-300">
-                            <Car className="w-4 h-4 text-cyan-400" />
+                    <tr
+                      key={vehicle.id}
+                      className={`hover:bg-surface-subtle/70 transition-colors ${
+                        isSelected ? 'bg-surface-subtle' : ''
+                      }`}
+                    >
+                      <td className="py-2.5 px-3">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => handleToggleSelect(vehicle.id)}
+                          className="rounded border-surface-border bg-surface text-tactical-blue focus:ring-0 cursor-pointer"
+                        />
+                      </td>
+
+                      {/* Stylized Indian License Plate Badge */}
+                      <td className="py-2.5 px-3 whitespace-nowrap">
+                        <div className="inline-flex items-center rounded border border-slate-700 bg-black overflow-hidden font-mono shadow-sm">
+                          <div className="bg-blue-800 text-white text-[9px] px-1 py-0.5 font-bold border-r border-slate-700 flex flex-col items-center justify-center leading-none">
+                            <span>IND</span>
                           </div>
-                          <span className="text-yellow-300 font-bold text-sm tracking-wider font-mono">
-                            {veh.plate_number}
-                          </span>
+                          <div className="px-2 py-0.5 text-xs font-bold text-white tracking-widest">
+                            {vehicle.plate_number}
+                          </div>
                         </div>
                       </td>
-                      <td className="py-3.5">
-                        <p className="text-slate-100 font-semibold">{veh.owner_name || '—'}</p>
-                        {veh.notes && <p className="text-[10px] text-slate-400">{veh.notes}</p>}
+
+                      {/* Owner */}
+                      <td className="py-2.5 px-3 font-bold text-slate-100">
+                        {vehicle.owner_name}
                       </td>
-                      <td className="py-3.5">
-                        {isWatchlist ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded bg-red-950 text-red-300 border border-red-800 text-[10px] font-bold">
-                            <Flame className="w-3 h-3 text-red-400" />
-                            WATCHLIST / FLAGGED
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded bg-emerald-950/60 text-emerald-300 border border-emerald-800 text-[10px] font-bold">
-                            <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-                            KNOWN
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-3.5 text-slate-400">
-                        {veh.created_at ? new Date(veh.created_at).toLocaleDateString() : 'Active'}
-                      </td>
-                      <td className="py-3.5 text-right pr-4">
-                        <button
-                          onClick={() => handleDelete(veh.id, veh.plate_number)}
-                          disabled={isDeleting === veh.id}
-                          className="p-1.5 rounded-lg text-slate-400 hover:text-red-400 hover:bg-red-950/40 transition-colors"
-                          title="Delete Vehicle"
+
+                      {/* Status */}
+                      <td className="py-2.5 px-3">
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+                            isKnown
+                              ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                              : 'bg-red-500/15 text-red-400 border-red-500/30'
+                          }`}
                         >
-                          {isDeleting === veh.id ? (
-                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                          ) : (
-                            <Trash2 className="w-3.5 h-3.5" />
-                          )}
+                          {vehicle.status}
+                        </span>
+                      </td>
+
+                      {/* Notes */}
+                      <td className="py-2.5 px-3 text-tactical-slate truncate max-w-xs text-[11px]">
+                        {vehicle.notes || '—'}
+                      </td>
+
+                      {/* Enrolled */}
+                      <td className="py-2.5 px-3 text-tactical-slate text-[11px]">
+                        {formatTimestamp(vehicle.created_at)}
+                      </td>
+
+                      {/* Actions */}
+                      <td className="py-2.5 px-3 text-right space-x-1.5 whitespace-nowrap">
+                        <button
+                          onClick={() => setViewVehicle(vehicle)}
+                          className="px-2 py-1 rounded bg-surface-subtle hover:bg-surface-elevated text-slate-300 border border-surface-border text-[10px]"
+                          title="Inspect Vehicle"
+                        >
+                          View
+                        </button>
+                        <button
+                          onClick={() => setEditVehicle(vehicle)}
+                          className="px-2 py-1 rounded bg-surface-subtle hover:bg-surface-elevated text-tactical-blue border border-surface-border text-[10px]"
+                          title="Edit Details"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          onClick={() => handleDeleteVehicle(vehicle.id)}
+                          className="px-2 py-1 rounded bg-surface-subtle hover:bg-red-950/40 text-red-400 border border-surface-border text-[10px]"
+                          title="Delete Record"
+                        >
+                          Delete
                         </button>
                       </td>
                     </tr>
@@ -263,133 +372,46 @@ export const Vehicles: React.FC = () => {
               </tbody>
             </table>
           </div>
-        </div>
+        )}
+      </div>
+
+      {/* Register Modal */}
+      {isRegisterModalOpen && (
+        <RegisterVehicleModal
+          isOpen={isRegisterModalOpen}
+          onClose={() => setIsRegisterModalOpen(false)}
+          onSuccess={() => {
+            setIsRegisterModalOpen(false);
+            fetchVehicles();
+          }}
+        />
       )}
 
-      {/* Add Vehicle Modal */}
-      {isAddModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-fade-in font-mono">
-          <div className="bg-surface border border-surface-border rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-surface-border">
-              <div className="flex items-center gap-2">
-                <div className="p-2 rounded-lg bg-blue-950 border border-blue-800 text-blue-400">
-                  <Car className="w-5 h-5" />
-                </div>
-                <h3 className="text-base font-bold text-white">Add Vehicle</h3>
-              </div>
-              <button
-                onClick={() => setIsAddModalOpen(false)}
-                className="text-slate-400 hover:text-white"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
+      {/* View Modal */}
+      {viewVehicle && (
+        <ViewVehicleModal
+          isOpen={Boolean(viewVehicle)}
+          vehicle={viewVehicle}
+          onClose={() => setViewVehicle(null)}
+          onEdit={(v) => {
+            setViewVehicle(null);
+            setEditVehicle(v);
+          }}
+        />
+      )}
 
-            <form onSubmit={handleSaveVehicle} className="space-y-4 text-xs">
-              {formError && (
-                <div className="p-2.5 rounded bg-red-950/60 border border-red-800 text-red-300">
-                  {formError}
-                </div>
-              )}
-
-              <div>
-                <label className="block text-slate-400 font-semibold mb-1">
-                  License Plate Number <span className="text-rose-400">*</span>
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. DL01AB1234 or HR26DK8337"
-                  value={formPlate}
-                  onChange={(e) => setFormPlate(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-yellow-300 focus:outline-none focus:border-blue-500 font-mono font-bold uppercase text-sm"
-                  required
-                  autoFocus
-                />
-              </div>
-
-              <div>
-                <label className="block text-slate-400 font-semibold mb-1">
-                  Owner Name / Fleet Unit
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. Rahul Sharma / Security Patrol #1"
-                  value={formOwner}
-                  onChange={(e) => setFormOwner(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 focus:outline-none focus:border-blue-500 font-sans"
-                />
-              </div>
-
-              <div>
-                <label className="block text-slate-400 font-semibold mb-1">
-                  Classification Status
-                </label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setFormStatus('KNOWN')}
-                    className={`flex items-center justify-center gap-2 p-2.5 rounded-lg border text-xs font-bold transition-all ${
-                      formStatus === 'KNOWN'
-                        ? 'bg-emerald-950/90 text-emerald-300 border-emerald-500 shadow'
-                        : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
-                    }`}
-                  >
-                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                    <span>KNOWN</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setFormStatus('WATCHLIST')}
-                    className={`flex items-center justify-center gap-2 p-2.5 rounded-lg border text-xs font-bold transition-all ${
-                      formStatus === 'WATCHLIST'
-                        ? 'bg-red-950/90 text-red-300 border-red-500 shadow'
-                        : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'
-                    }`}
-                  >
-                    <Flame className="w-4 h-4 text-red-400" />
-                    <span>FLAGGED</span>
-                  </button>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-slate-400 font-semibold mb-1">
-                  Notes (Optional)
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. Authorized visitor / Stolen vehicle report"
-                  value={formNotes}
-                  onChange={(e) => setFormNotes(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 focus:outline-none focus:border-blue-500 font-sans"
-                />
-              </div>
-
-              <div className="flex items-center justify-end gap-3 pt-3 border-t border-surface-border">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setIsAddModalOpen(false)}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  type="submit"
-                  variant="primary"
-                  size="sm"
-                  disabled={isSubmitting || !formPlate.trim()}
-                >
-                  {isSubmitting ? 'Saving...' : 'Save Vehicle'}
-                </Button>
-              </div>
-            </form>
-          </div>
-        </div>
+      {/* Edit Modal */}
+      {editVehicle && (
+        <EditVehicleModal
+          isOpen={Boolean(editVehicle)}
+          vehicle={editVehicle}
+          onClose={() => setEditVehicle(null)}
+          onSuccess={() => {
+            setEditVehicle(null);
+            fetchVehicles();
+          }}
+        />
       )}
     </div>
   );
 };
-
-export default Vehicles;

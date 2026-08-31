@@ -1,5 +1,42 @@
+# ====================================================================
+# IBVAP Module .gitignore
+# ====================================================================
 
+# Python Caches & Virtual Environments
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+venv/
+.venv/
+*.log
+
+# Frontend Dependencies & Build Outputs
 frontend/node_modules/
 frontend/dist/
+frontend/.vite/
+*.tsbuildinfo
+
+# Temporary Files & Archives
 member2 zip file.zip
 member2 zip file/
+_archive/
+scratch/
+tmp/
+temp/
+*.tmp
+*.bak
+*.backup
+
+# Environment Secrets
+.env
+.env.local
+!.env.example
+
+# SQLite Temporary Files (Preserve ibvap.db)
+*.db-wal
+*.db-shm
+*.db.backup

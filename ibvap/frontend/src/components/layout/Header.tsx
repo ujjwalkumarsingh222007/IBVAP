@@ -1,105 +1,150 @@
 import React, { useState, useEffect } from 'react';
-import { RefreshCw, Radio, User, LogOut } from 'lucide-react';
-import { ConnectionStatusBadge } from '../common/ConnectionStatusBadge';
-import { useAuth } from '../../hooks';
+import { Menu, Bell, ShieldAlert, Database, Cpu, Radio } from 'lucide-react';
+import { useHealth } from '../../context/HealthContext';
+import { useAlerts } from '../../context/AlertContext';
+import { Link } from 'react-router-dom';
 
 interface HeaderProps {
-  title?: string;
-  subtitle?: string;
-  onRefresh?: () => void;
-  isRefreshing?: boolean;
-  action?: React.ReactNode;
+  onMenuClick: () => void;
 }
 
-export const Header: React.FC<HeaderProps> = ({
-  title = 'Surveillance Command Center',
-  subtitle = 'Real-Time Border Video Analytics Platform',
-  onRefresh,
-  isRefreshing = false,
-  action,
-}) => {
-  const [timeStr, setTimeStr] = useState<string>('');
-  const { user, logout } = useAuth();
+export const Header: React.FC<HeaderProps> = ({ onMenuClick }) => {
+  const { isBackendOnline, isAiOnline, isDbConnected, health } = useHealth();
+  const { alerts } = useAlerts();
+  const [timeStr, setTimeStr] = useState('');
+  const [dateStr, setDateStr] = useState('');
 
-  // Live UTC Clock
   useEffect(() => {
     const updateTime = () => {
       const now = new Date();
       setTimeStr(
-        now.toISOString().replace('T', ' ').substring(0, 19) + ' UTC'
+        now.toLocaleTimeString([], {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: false,
+        })
+      );
+      setDateStr(
+        now.toLocaleDateString([], {
+          day: '2-digit',
+          month: 'short',
+          year: 'numeric',
+        }).toUpperCase()
       );
     };
+
     updateTime();
-    const timer = setInterval(updateTime, 1000);
-    return () => clearInterval(timer);
+    const interval = setInterval(updateTime, 1000);
+    return () => clearInterval(interval);
   }, []);
 
+  const criticalAlertCount = alerts.filter((a) => a.severity === 'CRITICAL' || a.severity === 'HIGH').length;
+
   return (
-    <header className="h-16 px-6 md:px-8 border-b border-surface-border bg-surface/80 backdrop-blur-md flex items-center justify-between sticky top-0 z-30">
-      {/* Title */}
-      <div className="min-w-0 pr-4">
-        <h1 className="text-sm sm:text-base font-bold text-slate-100 tracking-wide truncate">{title}</h1>
-        <p className="text-[11px] sm:text-xs text-slate-400 truncate">{subtitle}</p>
+    <header className="h-14 bg-surface border-b border-surface-border px-3 lg:px-5 flex items-center justify-between sticky top-0 z-30 shadow-tactical">
+      {/* Left: Mobile toggle + Breadcrumb / Title */}
+      <div className="flex items-center gap-3">
+        <button
+          onClick={onMenuClick}
+          className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-surface-elevated transition-colors lg:hidden border border-surface-border"
+          aria-label="Toggle navigation"
+        >
+          <Menu className="w-4 h-4" />
+        </button>
+
+        <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            <span className="text-xs font-mono font-bold tracking-wider text-slate-200">
+              IBVAP COMMAND CONSOLE
+            </span>
+          </div>
+          <span className="text-surface-border-light hidden sm:inline">|</span>
+          <span className="text-[11px] font-mono text-tactical-muted hidden md:inline">
+            ZONE: PRIMARY SECURITY PERIMETER
+          </span>
+        </div>
       </div>
 
-      {/* Controls & Status */}
-      <div className="flex items-center gap-3 sm:gap-4 shrink-0">
-        {action && <div>{action}</div>}
-        {/* Reusable System Connection Status Indicator */}
-        <div className="hidden sm:block">
-          <ConnectionStatusBadge showDetails />
+      {/* Center: Tactical Live Status Rail */}
+      <div className="hidden lg:flex items-center gap-4 bg-surface-subtle border border-surface-border px-3 py-1 rounded-md text-[11px] font-mono">
+        <div className="flex items-center gap-1.5 text-slate-300">
+          <span className={`w-1.5 h-1.5 rounded-full ${isBackendOnline ? 'bg-emerald-400' : 'bg-red-500'}`} />
+          <span className="text-slate-400">SRV:</span>
+          <span className={isBackendOnline ? 'text-emerald-400 font-semibold' : 'text-red-400'}>
+            {isBackendOnline ? 'ONLINE' : 'OFFLINE'}
+          </span>
+        </div>
+        <span className="text-surface-border">|</span>
+        <div className="flex items-center gap-1.5 text-slate-300">
+          <Cpu className="w-3 h-3 text-tactical-blue" />
+          <span className="text-slate-400">AI CORE:</span>
+          <span className={isAiOnline ? 'text-emerald-400 font-semibold' : 'text-amber-400'}>
+            {isAiOnline ? 'READY' : 'STANDBY'}
+          </span>
+        </div>
+        <span className="text-surface-border">|</span>
+        <div className="flex items-center gap-1.5 text-slate-300">
+          <Database className="w-3 h-3 text-tactical-cyan" />
+          <span className="text-slate-400">DB:</span>
+          <span className={isDbConnected ? 'text-emerald-400 font-semibold' : 'text-red-400'}>
+            {isDbConnected ? 'SYNCED' : 'DISCONNECTED'}
+          </span>
+        </div>
+        <span className="text-surface-border">|</span>
+        <div className="flex items-center gap-1.5 text-slate-300">
+          <Radio className="w-3 h-3 text-tactical-amber" />
+          <span className="text-slate-400">FEEDS:</span>
+          <span className="text-slate-200 font-semibold">{health?.active_cameras || 1} ACTIVE</span>
+        </div>
+      </div>
+
+      {/* Right: Operational Telemetry Clock & Alerts Bell */}
+      <div className="flex items-center gap-3 sm:gap-4">
+        {/* Synchronized Precision Clock */}
+        <div className="text-right hidden sm:block">
+          <div className="text-xs font-mono font-bold tracking-widest text-slate-200">
+            {timeStr || '00:00:00'}
+          </div>
+          <div className="text-[10px] font-mono text-tactical-slate tracking-wider">
+            {dateStr || 'UTC'}
+          </div>
         </div>
 
-        <div className="sm:hidden">
-          <ConnectionStatusBadge compact />
+        {/* Operator Badge */}
+        <div className="hidden xl:flex items-center gap-2 pl-3 border-l border-surface-border">
+          <div className="w-6 h-6 rounded bg-surface-elevated border border-surface-border flex items-center justify-center text-[10px] font-mono font-bold text-tactical-blue">
+            OP
+          </div>
+          <div className="text-[11px] font-mono text-slate-300 leading-tight">
+            <div>SEC-OP #01</div>
+            <div className="text-[9px] text-emerald-400 font-semibold">AUTHORIZED</div>
+          </div>
         </div>
 
-        {/* Live Clock */}
-        <div className="hidden xl:flex items-center gap-2 text-xs font-mono text-slate-300 px-3 py-1.5 bg-slate-900/80 rounded-lg border border-slate-800">
-          <Radio className="w-3.5 h-3.5 text-blue-400 animate-pulse" />
-          <span>{timeStr}</span>
-        </div>
-
-        {/* Authenticated User Status */}
-        {user && (
-          <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-900/90 rounded-lg border border-slate-800 font-mono text-xs">
-            <User className="w-3.5 h-3.5 text-slate-400" />
-            <span className="font-semibold text-slate-200">{user.username}</span>
+        {/* Alert Notification Trigger */}
+        <Link
+          to="/alerts"
+          className="relative p-2 rounded-lg text-slate-300 hover:text-white hover:bg-surface-elevated border border-surface-border transition-colors flex items-center justify-center"
+          title="Active Tactical Alerts"
+        >
+          {criticalAlertCount > 0 ? (
+            <ShieldAlert className="w-4 h-4 text-red-400 animate-pulse" />
+          ) : (
+            <Bell className="w-4 h-4 text-slate-300" />
+          )}
+          {alerts.length > 0 && (
             <span
-              className={`text-[9px] px-1.5 py-0.2 rounded font-bold uppercase ${
-                user.role === 'ADMIN'
-                  ? 'bg-red-950 text-red-400 border border-red-800'
-                  : user.role === 'OPERATOR'
-                  ? 'bg-blue-950 text-blue-400 border border-blue-800'
-                  : 'bg-emerald-950 text-emerald-400 border border-emerald-800'
+              className={`absolute -top-1 -right-1 px-1.5 py-0.2 rounded text-[10px] font-mono font-bold text-white shadow-md ${
+                criticalAlertCount > 0 ? 'bg-red-600 animate-pulse' : 'bg-tactical-blue'
               }`}
             >
-              {user.role}
+              {alerts.length > 99 ? '99+' : alerts.length}
             </span>
-            <button
-              onClick={logout}
-              className="ml-1 p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-red-400 transition-colors"
-              title="Log Out Session"
-            >
-              <LogOut className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        )}
-
-        {/* Manual Refresh Button */}
-        {onRefresh && (
-          <button
-            onClick={onRefresh}
-            disabled={isRefreshing}
-            className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500/40 disabled:opacity-50"
-            title="Refresh Live Data"
-          >
-            <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin text-blue-400' : ''}`} />
-          </button>
-        )}
+          )}
+        </Link>
       </div>
     </header>
   );
 };
-
-export default Header;

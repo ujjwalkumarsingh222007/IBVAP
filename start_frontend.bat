@@ -1,8 +1,8 @@
 @echo off
-title IBVAP Frontend Server (Port 5173)
-cd /d "%~dp0ibvap\frontend"
-echo ============================================================
-echo Starting IBVAP Frontend on http://localhost:5173
-echo ============================================================
-npm run dev
+title IBVAP Frontend Dashboard (Port 5173)
+echo ===================================================
+echo   Starting IBVAP Frontend Dashboard on port 5173...
+echo ===================================================
+cd /d "D:\IBVAP\IBVAP\ibvap\frontend"
+npm run dev -- --host 0.0.0.0
 pause

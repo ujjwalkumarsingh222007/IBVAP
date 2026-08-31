@@ -1,355 +1,354 @@
-import React, { useState, useCallback, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
-  Search,
+  ShieldAlert,
+  AlertTriangle,
+  RefreshCw,
   Eye,
   Camera as CameraIcon,
-  Clock,
-  UserX,
-  Car,
-  AlertTriangle,
-  Flame,
-  X,
-  CheckCircle2,
-  Video,
-  FileImage,
+  Trash2,
+  Calendar,
+  Image as ImageIcon,
 } from 'lucide-react';
-import { Header } from '../components/layout/Header';
-import { Button } from '../components/common/Button';
-import { CardSkeleton } from '../components/common/LoadingSkeleton';
-import { ErrorMessage } from '../components/common/ErrorMessage';
-import { eventsApi, formatApiError } from '../api';
-import { SurveillanceEvent } from '../types';
-import { usePolling } from '../hooks';
-import { alertRules } from '../utils/alertRules';
-
-type CategoryFilter = 'ALL' | 'PERSON' | 'VEHICLE' | 'INTRUSION' | 'WATCHLIST';
+import { alertApi } from '../api/alertApi';
+import { evidenceApi } from '../api/evidenceApi';
+import { CorrelatedThreat, EvidenceItem } from '../types';
+import { EvidenceModal } from '../components/alerts/EvidenceModal';
+import { formatFullDateTime, timeAgo, resolveMediaUrl } from '../utils/formatters';
 
 export const Alerts: React.FC = () => {
-  const navigate = useNavigate();
-  const [rawEvents, setRawEvents] = useState<SurveillanceEvent[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [error, setError] = useState<string | null>(null);
-  const [activeFilter, setActiveFilter] = useState<CategoryFilter>('ALL');
-  const [searchTerm, setSearchTerm] = useState<string>('');
-  const [selectedAlert, setSelectedAlert] = useState<SurveillanceEvent | null>(null);
-  const [showTechnicalDetails, setShowTechnicalDetails] = useState<boolean>(false);
+  const [threats, setThreats] = useState<CorrelatedThreat[]>([]);
+  const [evidenceList, setEvidenceList] = useState<EvidenceItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedEvidence, setSelectedEvidence] = useState<EvidenceItem | null>(null);
+  const [activeTab, setActiveTab] = useState<'evidence' | 'threats'>('evidence');
+  const [filterSeverity, setFilterSeverity] = useState<string>('ALL');
 
-  const fetchAlerts = useCallback(async () => {
+  const fetchData = useCallback(async () => {
     try {
-      const data = await eventsApi.getEvents({ limit: 100 });
-      setRawEvents(data);
-      setError(null);
-    } catch (err) {
-      setError(formatApiError(err));
+      setLoading(true);
+      const [tList, eList] = await Promise.allSettled([
+        alertApi.getThreats({ limit: 50 }),
+        evidenceApi.getEvidenceList({ limit: 50 }),
+      ]);
+
+      if (tList.status === 'fulfilled') setThreats(tList.value);
+      if (eList.status === 'fulfilled') setEvidenceList(eList.value);
+    } catch {
+      // ignore
     } finally {
       setLoading(false);
     }
   }, []);
 
-  const { refreshing, refresh } = usePolling(fetchAlerts, {
-    intervalMs: 4000,
-    enabled: true,
-    pauseWhenHidden: true,
-    immediate: true,
+  useEffect(() => {
+    fetchData();
+    const interval = setInterval(fetchData, 8000);
+    return () => clearInterval(interval);
+  }, [fetchData]);
+
+  const handleDeleteEvidence = async (id: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!window.confirm(`Delete forensic evidence snapshot #${id}?`)) return;
+    try {
+      await evidenceApi.deleteEvidence(id);
+      setEvidenceList((prev) => prev.filter((item) => item.id !== id));
+    } catch (err: any) {
+      alert(err.message || 'Failed to delete evidence');
+    }
+  };
+
+  const filteredEvidence = evidenceList.filter((item) => {
+    if (filterSeverity === 'CRITICAL') return item.status === 'FLAGGED';
+    if (filterSeverity === 'MEDIUM') return item.status === 'UNKNOWN';
+    return true;
   });
 
-  // Filter ONLY actual alerts using alertRules (known people / registered vehicles are strictly excluded)
-  const actualAlerts = useMemo(() => {
-    return alertRules.filterAlerts(rawEvents);
-  }, [rawEvents]);
-
-  const filteredAlerts = useMemo(() => {
-    return actualAlerts.filter((ev) => {
-      const cls = alertRules.classify(ev);
-
-      if (activeFilter === 'PERSON' && cls.detectionType !== 'Person') return false;
-      if (activeFilter === 'VEHICLE' && cls.detectionType !== 'Vehicle') return false;
-      if (activeFilter === 'INTRUSION' && cls.detectionType !== 'Intrusion') return false;
-      if (activeFilter === 'WATCHLIST' && cls.badgeType !== 'watchlist') return false;
-
-      if (searchTerm.trim()) {
-        const q = searchTerm.toLowerCase();
-        const matchCam = ev.camera_id.toLowerCase().includes(q);
-        const matchPlate = ev.metadata?.plate_number ? String(ev.metadata.plate_number).toLowerCase().includes(q) : false;
-        const matchTitle = cls.alertTitle.toLowerCase().includes(q);
-        if (!matchCam && !matchPlate && !matchTitle) return false;
-      }
-
-      return true;
-    });
-  }, [actualAlerts, activeFilter, searchTerm]);
+  const criticalCount = evidenceList.filter((e) => e.status === 'FLAGGED').length;
+  const mediumCount = evidenceList.filter((e) => e.status === 'UNKNOWN').length;
 
   return (
-    <div className="space-y-6 font-mono">
-      <Header
-        title="Alerts"
-        subtitle="Security notifications requiring immediate operator attention"
-        onRefresh={refresh}
-        isRefreshing={refreshing}
-      />
-
-      {/* Filter Tabs & Search Bar */}
-      <div className="bg-surface border border-surface-border rounded-xl p-3 flex flex-wrap items-center justify-between gap-3 shadow">
-        <div className="flex flex-wrap items-center gap-2">
-          {(['ALL', 'PERSON', 'VEHICLE', 'INTRUSION', 'WATCHLIST'] as CategoryFilter[]).map((f) => (
-            <button
-              key={f}
-              onClick={() => setActiveFilter(f)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                activeFilter === f
-                  ? 'bg-blue-600 text-white font-bold shadow'
-                  : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
-              }`}
-            >
-              {f === 'ALL' ? `All (${actualAlerts.length})` : f.charAt(0) + f.slice(1).toLowerCase()}
-            </button>
-          ))}
+    <div className="space-y-4 font-mono pb-12">
+      {/* 1. Header */}
+      <div className="bg-surface border border-surface-border p-4 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-tactical">
+        <div>
+          <div className="flex items-center gap-2">
+            <h1 className="text-base font-bold text-white tracking-wide uppercase">
+              TACTICAL THREAT & EVIDENCE CENTER
+            </h1>
+            <span className="text-xs px-2 py-0.5 rounded bg-surface-elevated text-red-400 border border-surface-border font-bold">
+              {criticalCount} CRITICAL
+            </span>
+          </div>
+          <p className="text-[11px] text-tactical-slate mt-0.5">
+            Autonomous threat correlation, optical forensic snapshots, and watchlist violation telemetry.
+          </p>
         </div>
 
-        <div className="relative min-w-[220px]">
-          <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
-          <input
-            type="text"
-            placeholder="Search alerts..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full bg-slate-900 border border-slate-800 rounded-lg pl-8 pr-3 py-1 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-blue-500"
-          />
+        <div className="flex items-center gap-2.5">
+          <button
+            onClick={fetchData}
+            className="p-2 rounded bg-surface-subtle hover:bg-surface-elevated text-slate-300 transition-colors border border-surface-border"
+            title="Refresh alerts"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+          </button>
         </div>
       </div>
 
-      {error && (
-        <ErrorMessage
-          title="Alert Feed Error"
-          message={error}
-          onRetry={refresh}
-        />
-      )}
-
-      {/* Alert Cards Grid */}
-      {loading && actualAlerts.length === 0 ? (
-        <CardSkeleton count={4} />
-      ) : filteredAlerts.length === 0 ? (
-        <div className="p-12 text-center bg-surface border border-surface-border rounded-2xl flex flex-col items-center justify-center gap-3">
-          <div className="p-3 bg-emerald-950/60 border border-emerald-800/80 rounded-2xl text-emerald-400">
-            <CheckCircle2 className="w-8 h-8" />
-          </div>
+      {/* 2. Severity KPI Strip */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="p-3 rounded-lg bg-surface border border-surface-border flex items-center justify-between">
           <div>
-            <h3 className="text-base font-bold text-slate-100">No Active Alerts</h3>
-            <p className="text-xs text-slate-400 mt-1">
-              All monitored activity is currently normal. Known persons and registered vehicles do not trigger alerts.
-            </p>
+            <div className="text-[10px] text-tactical-slate uppercase font-bold">TOTAL FORENSIC CAPTURES</div>
+            <div className="text-xl font-bold text-white mt-0.5">{evidenceList.length}</div>
+          </div>
+          <div className="w-8 h-8 rounded bg-surface-elevated border border-surface-border flex items-center justify-center text-tactical-blue">
+            <CameraIcon className="w-4 h-4" />
           </div>
         </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filteredAlerts.map((alert) => {
-            const cls = alertRules.classify(alert);
-            const isWatchlist = cls.badgeType === 'watchlist';
-            const isFlaggedPerson = cls.badgeType === 'flagged';
-            const timeFormatted = alert.timestamp
-              ? new Date(alert.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-              : 'Recent';
 
-            let icon = <Car className="w-4 h-4 text-amber-400" />;
-            if (isWatchlist) icon = <Flame className="w-4 h-4 text-red-400" />;
-            else if (isFlaggedPerson) icon = <UserX className="w-4 h-4 text-red-400" />;
-            else if (cls.detectionType === 'Intrusion') icon = <AlertTriangle className="w-4 h-4 text-amber-400" />;
-
-            return (
-              <div
-                key={alert.id}
-                className={`bg-surface border ${cls.alertBg} rounded-xl p-4 shadow-md flex flex-col justify-between transition-all hover:border-slate-400`}
-              >
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-1.5">
-                      <span className={`w-2 h-2 rounded-full ${cls.alertDot} animate-pulse`} />
-                      {icon}
-                      <span className={`text-xs font-bold ${cls.alertColor} uppercase`}>
-                        {cls.alertTitle}
-                      </span>
-                    </div>
-                    <span className="text-[10px] text-slate-500">
-                      #{alert.id}
-                    </span>
-                  </div>
-
-                  <div className="text-xs text-slate-300">
-                    {cls.identity !== '—' && cls.identity !== 'Unknown' ? (
-                      <p className="font-semibold text-slate-200">
-                        Target: <span className="font-mono text-yellow-300">{cls.identity}</span>
-                      </p>
-                    ) : (
-                      <p className="text-slate-400">
-                        {isFlaggedPerson ? 'Unknown person detected' : 'Perimeter event'}
-                      </p>
-                    )}
-                  </div>
-
-                  <div className="pt-2 border-t border-slate-800/60 flex items-center justify-between text-[11px] text-slate-400">
-                    <span className="flex items-center gap-1 text-slate-300">
-                      <CameraIcon className="w-3.5 h-3.5 text-cyan-400" />
-                      {alert.camera_id}
-                    </span>
-                    <span className="flex items-center gap-1 text-slate-500 font-sans">
-                      <Clock className="w-3 h-3 text-slate-600" />
-                      {timeFormatted}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="pt-3 mt-3 border-t border-slate-800/60 flex justify-end">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    icon={<Eye className="w-3.5 h-3.5" />}
-                    onClick={() => {
-                      setSelectedAlert(alert);
-                      setShowTechnicalDetails(false);
-                    }}
-                  >
-                    View Details
-                  </Button>
-                </div>
-              </div>
-            );
-          })}
+        <div className="p-3 rounded-lg bg-surface border border-surface-border flex items-center justify-between">
+          <div>
+            <div className="text-[10px] text-tactical-slate uppercase font-bold">CRITICAL / FLAGGED</div>
+            <div className="text-xl font-bold text-red-400 mt-0.5">{criticalCount}</div>
+          </div>
+          <div className="w-8 h-8 rounded bg-surface-elevated border border-surface-border flex items-center justify-center text-red-400">
+            <ShieldAlert className="w-4 h-4" />
+          </div>
         </div>
-      )}
 
-      {/* Alert Detail Modal */}
-      {selectedAlert && (() => {
-        const cls = alertRules.classify(selectedAlert);
-        const meta = selectedAlert.metadata || {};
+        <div className="p-3 rounded-lg bg-surface border border-surface-border flex items-center justify-between">
+          <div>
+            <div className="text-[10px] text-tactical-slate uppercase font-bold">UNIDENTIFIED ENTITIES</div>
+            <div className="text-xl font-bold text-amber-400 mt-0.5">{mediumCount}</div>
+          </div>
+          <div className="w-8 h-8 rounded bg-surface-elevated border border-surface-border flex items-center justify-center text-amber-400">
+            <AlertTriangle className="w-4 h-4" />
+          </div>
+        </div>
+      </div>
 
-        return (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-fade-in font-mono">
-            <div className="bg-surface border border-surface-border rounded-2xl w-full max-w-lg p-6 shadow-2xl space-y-4">
-              <div className="flex items-center justify-between pb-3 border-b border-surface-border">
-                <div className="flex items-center gap-2">
-                  <span className={`w-2.5 h-2.5 rounded-full ${cls.alertDot} animate-pulse`} />
-                  <h3 className="text-sm font-bold text-white uppercase">
-                    {cls.alertTitle}
-                  </h3>
-                </div>
-                <button
-                  onClick={() => setSelectedAlert(null)}
-                  className="text-slate-400 hover:text-white"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
+      {/* 3. Tab Selectors & Severity Filters */}
+      <div className="p-3 rounded-lg bg-surface border border-surface-border flex flex-col sm:flex-row items-center justify-between gap-3 shadow-tactical">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setActiveTab('evidence')}
+            className={`px-3 py-1.5 rounded text-xs font-bold transition-colors flex items-center gap-1.5 ${
+              activeTab === 'evidence'
+                ? 'bg-tactical-blue text-white shadow-tactical'
+                : 'bg-surface-subtle text-tactical-slate hover:text-white border border-surface-border'
+            }`}
+          >
+            <ImageIcon className="w-3.5 h-3.5" />
+            FORENSIC SNAPSHOTS ({evidenceList.length})
+          </button>
+          <button
+            onClick={() => setActiveTab('threats')}
+            className={`px-3 py-1.5 rounded text-xs font-bold transition-colors flex items-center gap-1.5 ${
+              activeTab === 'threats'
+                ? 'bg-tactical-blue text-white shadow-tactical'
+                : 'bg-surface-subtle text-tactical-slate hover:text-white border border-surface-border'
+            }`}
+          >
+            <ShieldAlert className="w-3.5 h-3.5" />
+            CORRELATED THREATS ({threats.length})
+          </button>
+        </div>
 
-              <div className="space-y-3 text-xs">
-                <div className="p-3 bg-slate-900 rounded-lg border border-slate-800 space-y-2">
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Camera:</span>
-                    <span className="text-cyan-400 font-semibold">{selectedAlert.camera_id}</span>
-                  </div>
+        {activeTab === 'evidence' && (
+          <div className="flex items-center gap-1 bg-surface-subtle border border-surface-border p-1 rounded">
+            <button
+              onClick={() => setFilterSeverity('ALL')}
+              className={`px-2.5 py-0.5 rounded text-[10px] font-bold ${
+                filterSeverity === 'ALL' ? 'bg-tactical-blue text-white' : 'text-tactical-slate hover:text-white'
+              }`}
+            >
+              ALL
+            </button>
+            <button
+              onClick={() => setFilterSeverity('CRITICAL')}
+              className={`px-2.5 py-0.5 rounded text-[10px] font-bold ${
+                filterSeverity === 'CRITICAL' ? 'bg-red-600 text-white' : 'text-tactical-slate hover:text-white'
+              }`}
+            >
+              FLAGGED ({criticalCount})
+            </button>
+            <button
+              onClick={() => setFilterSeverity('MEDIUM')}
+              className={`px-2.5 py-0.5 rounded text-[10px] font-bold ${
+                filterSeverity === 'MEDIUM' ? 'bg-amber-600 text-white' : 'text-tactical-slate hover:text-white'
+              }`}
+            >
+              UNKNOWN ({mediumCount})
+            </button>
+          </div>
+        )}
+      </div>
 
-                  {meta.plate_number && (
-                    <div className="flex justify-between">
-                      <span className="text-slate-400">Plate Number:</span>
-                      <strong className="text-yellow-400 font-bold">{String(meta.plate_number)}</strong>
-                    </div>
-                  )}
-
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Time:</span>
-                    <span className="text-slate-300 font-sans">
-                      {new Date(selectedAlert.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                    </span>
-                  </div>
-
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Confidence:</span>
-                    <span className="text-emerald-400 font-semibold">
-                      {Math.round(selectedAlert.confidence * 100)}%
-                    </span>
-                  </div>
-
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Status:</span>
-                    <span className={`font-bold uppercase ${cls.alertColor}`}>
-                      {cls.badgeType === 'watchlist'
-                        ? 'WATCHLIST'
-                        : cls.badgeType === 'flagged'
-                        ? 'UNKNOWN / FLAGGED'
-                        : 'ALERT'}
-                    </span>
-                  </div>
-
-                  {meta.watchlist_reason && (
-                    <div className="flex justify-between pt-1 border-t border-slate-800">
-                      <span className="text-slate-400">Reason:</span>
-                      <span className="text-red-300 font-sans">{String(meta.watchlist_reason)}</span>
-                    </div>
-                  )}
-                </div>
-
-                {/* Progressive Disclosure: Technical Details */}
-                <div>
-                  <button
-                    type="button"
-                    onClick={() => setShowTechnicalDetails(!showTechnicalDetails)}
-                    className="text-[11px] text-blue-400 hover:text-blue-300 font-medium font-sans"
-                  >
-                    {showTechnicalDetails ? '− Hide Technical Details' : '+ Technical Details (Raw Metadata & Coordinates)'}
-                  </button>
-
-                  {showTechnicalDetails && (
-                    <div className="mt-2 p-3 bg-slate-950 rounded-lg border border-slate-800 max-h-40 overflow-y-auto">
-                      <pre className="text-[11px] text-slate-300 whitespace-pre-wrap">
-                        {JSON.stringify(selectedAlert.metadata || {}, null, 2)}
-                      </pre>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div className="flex items-center justify-between pt-3 border-t border-surface-border">
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    onClick={() => {
-                      setSelectedAlert(null);
-                      navigate('/evidence');
-                    }}
-                    icon={<FileImage className="w-3.5 h-3.5" />}
-                  >
-                    View Evidence
-                  </Button>
-
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      setSelectedAlert(null);
-                      navigate('/cameras');
-                    }}
-                    icon={<Video className="w-3.5 h-3.5" />}
-                  >
-                    View Camera
-                  </Button>
-                </div>
-
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => setSelectedAlert(null)}
-                >
-                  Close
-                </Button>
-              </div>
+      {/* 4. Main Tab Views */}
+      {activeTab === 'evidence' ? (
+        filteredEvidence.length === 0 && !loading ? (
+          <div className="p-12 text-center rounded-lg border border-surface-border bg-surface text-tactical-slate">
+            <CameraIcon className="w-8 h-8 mx-auto opacity-40 mb-2" />
+            <div className="text-xs font-semibold">NO FORENSIC SNAPSHOTS RECORDED</div>
+            <div className="text-[10px] text-tactical-slate/70 mt-0.5">
+              Forensic evidence is captured upon detection of unknown or watchlist entities.
             </div>
           </div>
-        );
-      })()}
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {filteredEvidence.map((item) => {
+              const imgUrl = resolveMediaUrl(item.image_path || item.crop_image_path);
+              const isFlagged = item.status === 'FLAGGED';
+
+              return (
+                <div
+                  key={item.id}
+                  onClick={() => setSelectedEvidence(item)}
+                  className={`bg-surface border rounded-lg p-3 transition-all hover:shadow-tactical cursor-pointer flex flex-col justify-between group ${
+                    isFlagged
+                      ? 'border-red-500/40 hover:border-red-500'
+                      : 'border-surface-border hover:border-tactical-blue'
+                  }`}
+                >
+                  <div>
+                    {/* Image Preview Canvas */}
+                    <div className="relative aspect-video rounded bg-black border border-surface-border overflow-hidden mb-2.5 flex items-center justify-center tactical-reticle">
+                      {imgUrl ? (
+                        <img
+                          src={imgUrl}
+                          alt={`Evidence #${item.id}`}
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                          onError={(e) => {
+                            (e.target as HTMLElement).style.display = 'none';
+                          }}
+                        />
+                      ) : null}
+
+                      {/* Top Overlay Badge */}
+                      <div className="absolute top-2 left-2 z-10">
+                        <span
+                          className={`px-1.5 py-0.2 rounded text-[9px] font-bold border ${
+                            isFlagged
+                              ? 'bg-red-500/20 text-red-400 border-red-500/40'
+                              : 'bg-amber-500/20 text-amber-400 border-amber-500/40'
+                          }`}
+                        >
+                          {item.status || 'UNKNOWN'}
+                        </span>
+                      </div>
+
+                      {item.confidence && (
+                        <div className="absolute bottom-2 right-2 z-10 px-1.5 py-0.2 rounded bg-black/80 text-[9px] text-slate-300 border border-slate-700">
+                          {Math.round(item.confidence * 100)}% MATCH
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Metadata */}
+                    <div className="flex items-start justify-between gap-1.5 mb-1.5">
+                      <div>
+                        <h4 className="text-xs font-bold text-slate-100 uppercase tracking-wide truncate max-w-[190px]">
+                          {item.person_id || item.plate_number || `${item.status} ${item.detection_type.toUpperCase()}`}
+                        </h4>
+                        <div className="text-[10px] text-tactical-blue font-bold mt-0.5">
+                          SENSOR: {item.camera_id}
+                        </div>
+                      </div>
+                    </div>
+
+                    {item.reason && (
+                      <p className="text-[10px] text-tactical-slate line-clamp-2 leading-relaxed mb-2">
+                        {item.reason}
+                      </p>
+                    )}
+
+                    <div className="flex items-center gap-1 text-[9px] text-tactical-slate py-1.5 border-t border-surface-border">
+                      <Calendar className="w-3 h-3 text-slate-500" />
+                      <span>{formatFullDateTime(item.timestamp)}</span>
+                    </div>
+                  </div>
+
+                  {/* Actions */}
+                  <div className="pt-2 border-t border-surface-border flex items-center justify-between">
+                    <span className="text-[10px] text-tactical-blue group-hover:text-blue-300 font-bold flex items-center gap-1">
+                      <Eye className="w-3 h-3" /> Inspect Forensics
+                    </span>
+
+                    <button
+                      onClick={(e) => handleDeleteEvidence(item.id, e)}
+                      className="p-1 text-tactical-slate hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
+                      title="Delete snapshot"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )
+      ) : (
+        /* Threats Tab */
+        <div className="space-y-2.5">
+          {threats.length === 0 && !loading ? (
+            <div className="p-12 text-center rounded-lg border border-surface-border bg-surface text-tactical-slate">
+              <ShieldAlert className="w-8 h-8 mx-auto opacity-40 mb-2" />
+              <div className="text-xs font-semibold">NO ACTIVE CORRELATED THREAT PATTERNS</div>
+              <div className="text-[10px] text-tactical-slate/70 mt-0.5">
+                Multi-event correlation engine reports sector safe.
+              </div>
+            </div>
+          ) : (
+            threats.map((threat) => (
+              <div
+                key={threat.threat_id || threat.id}
+                className="p-3.5 rounded-lg bg-surface border border-surface-border hover:border-tactical-blue transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-tactical"
+              >
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`px-1.5 py-0.2 rounded text-[9px] font-bold border ${
+                        threat.severity === 'CRITICAL'
+                          ? 'bg-red-500/20 text-red-400 border-red-500/40'
+                          : 'bg-amber-500/20 text-amber-400 border-amber-500/40'
+                      }`}
+                    >
+                      {threat.severity}
+                    </span>
+                    <h3 className="text-xs font-bold text-white uppercase">{threat.title}</h3>
+                    <span className="text-[10px] px-1.5 py-0.2 rounded bg-surface-subtle text-tactical-slate border border-surface-border">
+                      SCORE: {threat.score}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-300 leading-relaxed">{threat.reason}</p>
+                  <div className="flex items-center gap-2 text-[10px] text-tactical-slate pt-0.5">
+                    <span>SENSOR: {threat.camera_id}</span>
+                    <span>·</span>
+                    <span>EVENTS: {threat.event_count}</span>
+                    <span>·</span>
+                    <span>{timeAgo(threat.last_event_time)}</span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-surface-subtle text-slate-200 border border-surface-border">
+                    {threat.status}
+                  </span>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+
+      {/* Forensics Viewer Modal */}
+      {selectedEvidence && (
+        <EvidenceModal
+          evidence={selectedEvidence}
+          onClose={() => setSelectedEvidence(null)}
+        />
+      )}
     </div>
   );
 };
-
-export default Alerts;

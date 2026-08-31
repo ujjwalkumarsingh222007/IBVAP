@@ -122,4 +122,8 @@ class PlatePreprocessor:
 
         _, binary = cv2.threshold(enhanced_gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-        return enhanced_gray, binary
+        # 6. Sharpening
+        kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]], dtype=np.float32)
+        sharpened = cv2.filter2D(enhanced_gray, -1, kernel)
+
+        return enhanced_gray, binary, sharpened

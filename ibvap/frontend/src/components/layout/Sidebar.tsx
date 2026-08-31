@@ -2,127 +2,154 @@ import React from 'react';
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard,
-  Video,
+  Cctv,
   Users,
   Car,
-  Bell,
-  Activity,
+  Clock,
+  AlertTriangle,
   Settings,
   Shield,
-  LogOut,
-  UserCheck,
-  FileImage,
+  X,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
-import { ConnectionStatusBadge } from '../common/ConnectionStatusBadge';
-import { useAuth } from '../../hooks';
+import { useAlerts } from '../../context/AlertContext';
 
-interface NavItem {
-  name: string;
-  path: string;
-  icon: React.ElementType;
+interface SidebarProps {
+  isOpen: boolean;
+  onToggle: () => void;
+  onCloseMobile: () => void;
 }
 
-const PRIMARY_NAV: NavItem[] = [
-  { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
-  { name: 'Cameras', path: '/cameras', icon: Video },
-  { name: 'People', path: '/people', icon: Users },
-  { name: 'Vehicles', path: '/vehicles', icon: Car },
-  { name: 'Alerts', path: '/alerts', icon: Bell },
-  { name: 'Evidence', path: '/evidence', icon: FileImage },
-  { name: 'Events', path: '/events', icon: Activity },
-  { name: 'Settings', path: '/settings', icon: Settings },
-];
+export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onToggle, onCloseMobile }) => {
+  const { alerts } = useAlerts();
+  const unreadAlerts = alerts.filter((a) => a.severity === 'CRITICAL' || a.severity === 'HIGH').length;
 
-export const Sidebar: React.FC = () => {
-  const { user, logout } = useAuth();
+  const navItems = [
+    { to: '/', label: 'Overview', icon: LayoutDashboard, tag: 'DASH' },
+    { to: '/cameras', label: 'Surveillance Wall', icon: Cctv, tag: 'LIVE' },
+    { to: '/people', label: 'Biometrics', icon: Users, tag: 'FACE' },
+    { to: '/vehicles', label: 'ANPR Tracking', icon: Car, tag: 'PLATE' },
+    { to: '/events', label: 'Audit Logs', icon: Clock, tag: 'EVT' },
+    {
+      to: '/alerts',
+      label: 'Threat Center',
+      icon: AlertTriangle,
+      badge: unreadAlerts > 0 ? unreadAlerts : undefined,
+      tag: 'ALRT',
+    },
+  ];
 
   return (
-    <aside className="w-60 bg-surface border-r border-surface-border flex flex-col shrink-0 min-h-screen">
-      {/* Brand Header */}
-      <div className="h-16 px-5 flex items-center gap-3 border-b border-surface-border/60">
-        <div className="p-2 bg-blue-950/80 border border-blue-800/60 rounded-xl text-blue-400">
-          <Shield className="w-5 h-5" />
-        </div>
-        <div>
-          <div className="flex items-center gap-1.5">
-            <span className="font-bold text-slate-100 tracking-wide text-sm font-mono">IBVAP</span>
-            <span className="text-[9px] px-1 py-0.2 rounded bg-blue-950 text-blue-400 border border-blue-800 font-mono">
-              PROTOTYPE
-            </span>
-          </div>
-          <p className="text-[10px] text-slate-400 truncate max-w-[130px]">
-            Security Command
-          </p>
-        </div>
-      </div>
-
-      {/* Primary Clean Navigation */}
-      <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto custom-scrollbar">
-        {PRIMARY_NAV.map((item) => {
-          const Icon = item.icon;
-          return (
-            <NavLink
-              key={item.path}
-              to={item.path}
-              className={({ isActive }) =>
-                `flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs transition-all duration-150 ${
-                  isActive
-                    ? 'bg-blue-600/15 text-blue-400 border border-blue-500/30 font-bold shadow-sm'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border border-transparent font-medium'
-                }`
-              }
-            >
-              <Icon className="w-4 h-4 shrink-0" />
-              <span>{item.name}</span>
-            </NavLink>
-          );
-        })}
-      </nav>
-
-      {/* Operator Session Info */}
-      {user && (
-        <div className="px-3 pb-2">
-          <div className="p-3 bg-slate-900/80 rounded-xl border border-slate-800 font-mono text-xs space-y-1.5">
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] text-slate-400 uppercase font-semibold flex items-center gap-1">
-                <UserCheck className="w-3 h-3 text-cyan-400" /> Operator
-              </span>
-              <span
-                className={`text-[9px] px-1.5 py-0.2 rounded font-bold uppercase ${
-                  user.role === 'ADMIN'
-                    ? 'bg-red-950 text-red-400 border border-red-800'
-                    : 'bg-blue-950 text-blue-400 border border-blue-800'
-                }`}
-              >
-                {user.role}
-              </span>
-            </div>
-
-            <div className="flex items-center justify-between pt-0.5">
-              <span className="text-slate-200 font-bold truncate max-w-[110px]">{user.username}</span>
-              <button
-                onClick={logout}
-                className="text-[10px] text-slate-400 hover:text-red-400 flex items-center gap-1 transition-colors"
-                title="Log Out"
-              >
-                <LogOut className="w-3 h-3" />
-                <span>Exit</span>
-              </button>
-            </div>
-          </div>
-        </div>
+    <>
+      {/* Mobile Backdrop */}
+      {isOpen && (
+        <div
+          onClick={onCloseMobile}
+          className="fixed inset-0 bg-black/70 backdrop-blur-xs z-40 lg:hidden"
+        />
       )}
 
-      {/* System Status Footer */}
-      <div className="p-3 m-3 bg-slate-900/60 rounded-xl border border-surface-border/60 flex items-center justify-between text-xs">
-        <div className="flex items-center gap-2">
-          <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-          <span className="text-[11px] text-slate-300 font-medium font-mono">System Online</span>
+      <aside
+        className={`fixed top-0 left-0 bottom-0 z-40 flex flex-col bg-surface border-r border-surface-border transition-all duration-200 ease-in-out ${
+          isOpen ? 'w-56' : 'w-16'
+        } ${isOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}
+      >
+        {/* Brand Header */}
+        <div className="h-14 flex items-center justify-between px-3.5 border-b border-surface-border">
+          <div className="flex items-center gap-2.5 overflow-hidden">
+            <div className="w-8 h-8 rounded bg-surface-elevated border border-tactical-blue/40 flex items-center justify-center text-tactical-blue shrink-0 shadow-tactical">
+              <Shield className="w-4 h-4" />
+            </div>
+            {isOpen && (
+              <div className="flex flex-col min-w-0">
+                <span className="font-mono font-black text-sm tracking-widest text-white leading-none">
+                  IBVAP<span className="text-tactical-blue font-sans text-xs">·AI</span>
+                </span>
+                <span className="text-[9px] tracking-wider text-tactical-slate uppercase font-mono mt-0.5">
+                  DEFENSE SUITE
+                </span>
+              </div>
+            )}
+          </div>
+
+          <button
+            onClick={onToggle}
+            className="p-1 rounded text-slate-400 hover:text-white hover:bg-surface-elevated transition-colors hidden lg:flex border border-surface-border/60"
+            title={isOpen ? 'Collapse sidebar' : 'Expand sidebar'}
+          >
+            {isOpen ? <ChevronLeft className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+          </button>
+
+          <button
+            onClick={onCloseMobile}
+            className="p-1 rounded text-slate-400 hover:text-white hover:bg-surface-elevated transition-colors lg:hidden"
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
-        <ConnectionStatusBadge compact />
-      </div>
-    </aside>
+
+        {/* Section Tag */}
+        {isOpen && (
+          <div className="px-3 pt-3 pb-1 text-[10px] font-mono font-bold text-tactical-slate tracking-widest uppercase">
+            OPERATIONAL MODULES
+          </div>
+        )}
+
+        {/* Navigation Links */}
+        <nav className="flex-1 py-2 px-2 space-y-1 overflow-y-auto">
+          {navItems.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              onClick={onCloseMobile}
+              className={({ isActive }) =>
+                `flex items-center gap-2.5 px-2.5 py-2 rounded text-xs font-medium transition-all group ${
+                  isActive
+                    ? 'bg-surface-elevated text-white border-l-2 border-tactical-blue font-semibold shadow-sm'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-surface-subtle border-l-2 border-transparent'
+                } ${!isOpen && 'justify-center px-0'}`
+              }
+              title={!isOpen ? item.label : undefined}
+            >
+              <item.icon className={`w-4 h-4 shrink-0 transition-transform group-hover:scale-105`} />
+              {isOpen && (
+                <>
+                  <span className="truncate">{item.label}</span>
+                  {item.badge !== undefined ? (
+                    <span className="ml-auto px-1.5 py-0.2 text-[9px] font-mono font-bold rounded bg-red-600 text-white animate-pulse">
+                      {item.badge}
+                    </span>
+                  ) : (
+                    <span className="ml-auto text-[9px] font-mono text-tactical-slate opacity-60 group-hover:opacity-100">
+                      {item.tag}
+                    </span>
+                  )}
+                </>
+              )}
+            </NavLink>
+          ))}
+        </nav>
+
+        {/* Bottom Settings Link & Telemetry Status */}
+        <div className="p-2 border-t border-surface-border space-y-1">
+          <NavLink
+            to="/settings"
+            onClick={onCloseMobile}
+            className={({ isActive }) =>
+              `flex items-center gap-2.5 px-2.5 py-2 rounded text-xs font-medium transition-colors ${
+                isActive
+                  ? 'bg-surface-elevated text-white border-l-2 border-tactical-blue'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-surface-subtle border-l-2 border-transparent'
+              } ${!isOpen && 'justify-center px-0'}`
+            }
+            title={!isOpen ? 'System Settings' : undefined}
+          >
+            <Settings className="w-4 h-4 shrink-0" />
+            {isOpen && <span className="truncate">Configuration</span>}
+          </NavLink>
+        </div>
+      </aside>
+    </>
   );
 };
-
-export default Sidebar;

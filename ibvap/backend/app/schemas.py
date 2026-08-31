@@ -561,5 +561,23 @@ class VehicleResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class PersonUpdateRequest(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=128)
+    status: Optional[PersonStatus] = None
+    notes: Optional[str] = Field(None, max_length=256)
 
 
+class VehicleUpdateRequest(BaseModel):
+    plate_number: Optional[str] = Field(None, min_length=1, max_length=64)
+    owner_name: Optional[str] = Field(None, max_length=128)
+    status: Optional[VehicleStatus] = None
+    notes: Optional[str] = Field(None, max_length=256)
+
+
+class BulkDeleteRequest(BaseModel):
+    ids: List[int] = Field(..., min_length=1, description="List of integer IDs to delete")
+
+
+class BulkStatusUpdateRequest(BaseModel):
+    ids: List[int] = Field(..., min_length=1, description="List of integer IDs to update")
+    status: str = Field(..., description="New status value")

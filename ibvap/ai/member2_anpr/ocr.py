@@ -177,22 +177,35 @@ class EasyOCREngine(BaseOCREngine):
 
         # 2. Run OCR on preprocessed variants
         try:
-            enhanced_gray, binary = self.preprocessor.get_variants(plate_image)
+            enhanced_gray, binary, sharpened = self.preprocessor.get_variants(plate_image)
             gray_res = self._run_easyocr(enhanced_gray)
             bin_res = self._run_easyocr(binary)
+            sharp_res = self._run_easyocr(sharpened)
+            proc_h, proc_w = enhanced_gray.shape[:2]
         except Exception as exc:
             logger.debug("Preprocessing before OCR skipped/failed: %s", exc)
-            gray_res = ( "", 0.0 )
-            bin_res = ( "", 0.0 )
+            gray_res = ("", 0.0)
+            bin_res = ("", 0.0)
+            sharp_res = ("", 0.0)
+            proc_h, proc_w = h, w
 
         # Select candidate with the best confidence and non-empty text
-        candidates = [raw_res, gray_res, bin_res]
-        # Prefer candidates that produced non-empty text with highest confidence
+        candidates = [raw_res, gray_res, bin_res, sharp_res]
         valid_candidates = [c for c in candidates if c[0].strip()]
         if valid_candidates:
             best_text, best_conf = max(valid_candidates, key=lambda item: item[1])
         else:
             best_text, best_conf = "", 0.0
+
+        logger.debug(
+            "[OCR] original_size=%dx%d | processed_size=%dx%d | ocr_text=%r | ocr_confidence=%.2f",
+            w,
+            h,
+            proc_w,
+            proc_h,
+            best_text,
+            best_conf,
+        )
 
         return OCRResult(
             raw_text=best_text,

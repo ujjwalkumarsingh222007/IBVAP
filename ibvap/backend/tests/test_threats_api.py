@@ -63,7 +63,7 @@ def test_create_events_and_retrieve_correlated_threat(client: TestClient):
     threats = resp.json()
     assert len(threats) >= 1
 
-    thr = threats[0]
+    thr = next((t for t in threats if "TN09AB1234" in t.get("title", "")), threats[0])
     assert thr["camera_id"] == "CAM-TOWER-04"
     assert thr["severity"] == "CRITICAL"
     assert "TN09AB1234" in thr["title"]

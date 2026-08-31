@@ -1,0 +1,92 @@
+# ====================================================================
+# IBVAP (Intelligent Video-Based Alert Platform) — .gitignore
+# ====================================================================
+
+# Python & Virtual Environments
+.venv/
+.venv*/
+venv/
+env/
+ENV/
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Testing & Linting Caches
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+
+# Node & Frontend Build Outputs
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+.pnpm-debug.log*
+**/frontend/dist/
+**/frontend/.vite/
+*.tsbuildinfo
+
+# IDE & Editor Files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Environment Files (Protect secrets)
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Temporary Archives & Scratch Files
+_archive/
+scratch/
+tmp/
+temp/
+*.tmp
+*.bak
+*.backup
+*.zip
+
+# SQLite Temporary WAL / SHM (Preserve main ibvap.db database)
+*.db-wal
+*.db-shm
+*.db.backup
+
+# Generated Demo / Temporary Exports
+runs/
+captures/temp/
+test_output/

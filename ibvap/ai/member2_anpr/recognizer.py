@@ -160,6 +160,12 @@ def normalise_plate(raw_text: str, country: str = "IN") -> Tuple[str, bool]:
         return "", False
 
     if country == "IN":
+        # Strip "IND" country prefix common on Indian HSRP plates if followed by standard registration
+        if cleaned.startswith("IND") and len(cleaned) >= 8:
+            potential_state = cleaned[3:5]
+            if potential_state in INDIAN_STATE_CODES or cleaned[3:5].isalpha() or cleaned[3:5].isalnum():
+                cleaned = cleaned[3:]
+
         cleaned = _apply_confusion_map(cleaned)
 
     was_modified = (cleaned != original)

@@ -6,6 +6,7 @@ Registration API, and Live Known/Flagged/Unknown Decision Logic.
 from __future__ import annotations
 
 import io
+import time
 import cv2
 import numpy as np
 import pytest
@@ -507,3 +508,192 @@ def test_case_9_registered_and_unknown_in_same_frame():
     assert res2["person_name"] == "Unknown"
     assert res2["is_known"] is False
     assert res2["should_emit_alert"] is True
+
+
+def test_case_10_three_people_simultaneous_independent_recognition():
+    """TEST 10: 3 people in same frame: Ujjwal (KNOWN) + Rahul (KNOWN) + Unknown Person (UNKNOWN)."""
+    svc = FaceRecognitionService.get_instance()
+
+    img_u = _create_synthetic_face_image()
+    emb_u = svc.extract_embedding(img_u)
+
+    img_r = np.full((200, 200, 3), 90, dtype=np.uint8)
+    cv2.circle(img_r, (100, 100), 70, (230, 230, 230), -1)
+    cv2.circle(img_r, (70, 85), 10, (20, 20, 20), -1)
+    cv2.circle(img_r, (130, 85), 10, (20, 20, 20), -1)
+    cv2.ellipse(img_r, (100, 140), (30, 10), 0, 0, 180, (20, 20, 20), 3)
+    emb_r = svc.extract_embedding(img_r)
+
+    person_u = Person(id=101, person_code="P-UJJ", name="Ujjwal", status="KNOWN", face_embedding=emb_u)
+    person_r = Person(id=102, person_code="P-RAH", name="Rahul", status="KNOWN", face_embedding=emb_r)
+    registered = [person_u, person_r]
+
+    img_unk = np.full((200, 200, 3), 50, dtype=np.uint8)
+    cv2.rectangle(img_unk, (30, 30), (170, 170), (160, 160, 160), -1)
+    cv2.circle(img_unk, (65, 75), 12, (0, 0, 0), -1)
+    cv2.circle(img_unk, (135, 75), 12, (0, 0, 0), -1)
+
+    frame = np.full((400, 900, 3), 30, dtype=np.uint8)
+    frame[50:250, 50:250] = img_u     # Person 1 (Ujjwal)
+    frame[50:250, 350:550] = img_r    # Person 2 (Rahul)
+    frame[50:250, 650:850] = img_unk  # Person 3 (Unknown)
+
+    for _ in range(3):
+        r1 = svc.process_person_detection(frame, "CAM-3P", {"x1": 50, "y1": 50, "x2": 250, "y2": 250}, registered, track_id=201)
+        r2 = svc.process_person_detection(frame, "CAM-3P", {"x1": 350, "y1": 50, "x2": 550, "y2": 250}, registered, track_id=202)
+        r3 = svc.process_person_detection(frame, "CAM-3P", {"x1": 650, "y1": 50, "x2": 850, "y2": 250}, registered, track_id=203)
+
+    assert r1["status"] == "KNOWN"
+    assert r1["person_name"] == "Ujjwal"
+    assert r1["should_emit_alert"] is False
+
+    assert r2["status"] == "KNOWN"
+    assert r2["person_name"] == "Rahul"
+    assert r2["should_emit_alert"] is False
+
+    assert r3["status"] == "UNKNOWN"
+    assert r3["person_name"] == "Unknown"
+    assert r3["should_emit_alert"] is True
+
+
+def test_multi_angle_enrollment_matching():
+    """TEST 11: Multi-angle enrollment where query matches one of the 7 registered angles."""
+    from app.models import FaceEmbedding
+
+    svc = FaceRecognitionService.get_instance()
+    img_front = _create_synthetic_face_image()
+    emb_front = svc.extract_embedding(img_front)
+
+    # Turned image
+    M = cv2.getRotationMatrix2D((100, 100), 12, 1.0)
+    img_turned = cv2.warpAffine(img_front, M, (200, 200))
+    emb_turned = svc.extract_embedding(img_turned)
+
+    person = Person(id=301, person_code="P-MULTI", name="Ujjwal Multi", status="KNOWN", face_embedding=emb_front)
+    person.embeddings = [
+        FaceEmbedding(person_id=301, embedding=emb_front, angle="FRONT"),
+        FaceEmbedding(person_id=301, embedding=emb_turned, angle="SLIGHT_LEFT"),
+    ]
+
+    # Query with turned face
+    matched = svc.match_face(emb_turned, [person])
+    assert matched is not None
+    p, sim = matched
+    assert p.name == "Ujjwal Multi"
+    assert sim >= 0.70
+
+
+def test_registered_person_leaves_and_unknown_enters_no_identity_inheritance():
+    """
+    CRITICAL IDENTITY LIFECYCLE TEST:
+    Person A (Ujjwal) enters -> recognized as KNOWN.
+    Person A leaves (track expires).
+    Person B (Unknown) enters -> recognized strictly as UNKNOWN, NEVER inherits Person A's identity.
+    """
+    svc = FaceRecognitionService.get_instance()
+    img_u = np.full((200, 200, 3), 100, dtype=np.uint8)
+    cv2.circle(img_u, (100, 100), 70, (210, 210, 210), -1)
+    cv2.circle(img_u, (75, 80), 12, (50, 50, 50), -1)
+    cv2.circle(img_u, (125, 80), 12, (50, 50, 50), -1)
+    cv2.ellipse(img_u, (100, 135), (25, 12), 0, 0, 180, (50, 50, 50), 3)
+    emb_u = svc.extract_embedding(img_u)
+
+    person_u = Person(id=801, person_code="P-UJJ", name="Ujjwal", status="KNOWN", face_embedding=emb_u)
+    registered = [person_u]
+
+    # Frame 1 & 2: Person A (track #1) appears
+    for _ in range(2):
+        r_a = svc.process_person_detection(
+            frame=img_u,
+            camera_id="CAM-LEAVE-TEST",
+            bbox={"x1": 10, "y1": 10, "x2": 190, "y2": 190},
+            registered_people=registered,
+            track_id=1,
+        )
+    assert r_a["status"] == "KNOWN"
+    assert r_a["person_name"] == "Ujjwal"
+    assert r_a["should_emit_alert"] is False
+
+    # Person A leaves camera: sync active tracks with no active track #1
+    svc._tracks["CAM-LEAVE-TEST:1"].last_seen = time.time() - 5.0  # simulate expiration
+    svc.sync_active_camera_tracks("CAM-LEAVE-TEST", [])
+    assert "CAM-LEAVE-TEST:1" not in svc._tracks
+
+    # Person B (Unknown) appears (either with new track_id #2 or recycled track_id)
+    img_unk = np.full((200, 200, 3), 40, dtype=np.uint8)
+    cv2.rectangle(img_unk, (20, 20), (180, 180), (140, 140, 140), -1)
+    cv2.circle(img_unk, (60, 70), 10, (0, 0, 0), -1)
+    cv2.circle(img_unk, (140, 70), 10, (0, 0, 0), -1)
+
+    for _ in range(2):
+        r_b = svc.process_person_detection(
+            frame=img_unk,
+            camera_id="CAM-LEAVE-TEST",
+            bbox={"x1": 10, "y1": 10, "x2": 190, "y2": 190},
+            registered_people=registered,
+            track_id=2,
+        )
+
+    # Person B MUST be UNKNOWN, NEVER Ujjwal!
+    assert r_b["status"] == "UNKNOWN"
+    assert r_b["person_name"] == "Unknown"
+    assert r_b["is_known"] is False
+
+
+def test_recycled_track_id_resets_identity_cleanly():
+    """
+    Ensure that even if a tracker recycles track_id=10, the new detection starts as PENDING/UNKNOWN
+    and does not inherit previous person's identity.
+    """
+    svc = FaceRecognitionService.get_instance()
+    img_u = _create_synthetic_face_image()
+    emb_u = svc.extract_embedding(img_u)
+
+    person_u = Person(id=802, person_code="P-UJJ2", name="Ujjwal Original", status="KNOWN", face_embedding=emb_u)
+    registered = [person_u]
+
+    # Track 10 matches Ujjwal
+    for _ in range(2):
+        r1 = svc.process_person_detection(img_u, "CAM-RECYCLE", {"x1": 10, "y1": 10, "x2": 190, "y2": 190}, registered, track_id=10)
+    assert r1["person_name"] == "Ujjwal Original"
+
+    # Track 10 expires / leaves
+    svc._tracks["CAM-RECYCLE:10"].last_seen = time.time() - 3.0
+    svc._purge_stale_tracks(time.time())
+    assert "CAM-RECYCLE:10" not in svc._tracks
+
+    # Track 10 re-used for unknown person
+    img_unk = np.full((200, 200, 3), 30, dtype=np.uint8)
+    r2 = svc.process_person_detection(img_unk, "CAM-RECYCLE", {"x1": 10, "y1": 10, "x2": 190, "y2": 190}, registered, track_id=10)
+    assert r2["status"] in ("PENDING", "UNKNOWN")
+    assert r2["person_name"] != "Ujjwal Original"
+
+
+def test_duplicate_registration_check():
+    """
+    Test duplicate face registration detector warns if a candidate face matches an existing person.
+    """
+    svc = FaceRecognitionService.get_instance()
+    img = _create_synthetic_face_image()
+    emb = svc.extract_embedding(img)
+    assert emb is not None
+
+    person = Person(id=999, person_code="P-DUP-1", name="Original Person", status="KNOWN", face_embedding=emb)
+    
+    # Populate cache mock
+    import numpy as np
+    norm_emb = np.array(emb, dtype=np.float32)
+    norm_emb = norm_emb / np.linalg.norm(norm_emb)
+    svc._cache_embeddings = np.array([norm_emb])
+    svc._cache_metadata = [{"id": 999, "person_code": "P-DUP-1", "name": "Original Person", "status": "KNOWN"}]
+    svc._cache_loaded = True
+
+    # Same face candidate check
+    dup = svc.check_duplicate_registration(emb, threshold=0.65)
+    assert dup is not None
+    assert dup["is_duplicate"] is True
+    assert dup["person_name"] == "Original Person"
+    assert dup["similarity"] >= 0.90
+
+
+

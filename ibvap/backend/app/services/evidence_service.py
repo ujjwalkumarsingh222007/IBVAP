@@ -9,6 +9,7 @@ import logging
 import time
 import uuid
 from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -24,7 +25,8 @@ logger = logging.getLogger("ibvap.evidence_service")
 
 class EvidenceService:
     """
-    Singleton service managing evidence image storage and SQLite metadata persistence.
+    EvidenceService manages the persistent capture and lifecycle of UNKNOWN
+    and FLAGGED visual surveillance evidence.
     """
 
     _instance: Optional[EvidenceService] = None
@@ -34,7 +36,8 @@ class EvidenceService:
         self.evidence_dir.mkdir(parents=True, exist_ok=True)
         # Deduplication cache: key -> timestamp (epoch seconds)
         self._cooldown_cache: Dict[str, float] = {}
-        self.cooldown_seconds: float = 12.0
+        self.cooldown_seconds: float = 30.0  # 30-second deduplication cooldown per track
+        self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="evidence_writer")
 
     @classmethod
     def get_instance(cls) -> EvidenceService:
@@ -52,6 +55,13 @@ class EvidenceService:
         self._cooldown_cache[key] = now
         return True
 
+    def _save_image_async(self, file_path: Path, image_data: np.ndarray, quality: int = 85) -> None:
+        """Write JPEG image asynchronously in background thread."""
+        try:
+            cv2.imwrite(str(file_path), image_data, [cv2.IMWRITE_JPEG_QUALITY, quality])
+        except Exception as exc:
+            logger.error("[EVIDENCE ASYNC ERROR] Failed writing evidence file %s: %s", file_path, exc)
+
     def capture_evidence(
         self,
         frame: np.ndarray,
@@ -60,6 +70,7 @@ class EvidenceService:
         status: str,  # 'UNKNOWN' or 'FLAGGED'
         confidence: float,
         bbox: Optional[Dict[str, float]] = None,
+        track_id: Optional[int] = None,
         plate_number: Optional[str] = None,
         person_id: Optional[str] = None,
         vehicle_id: Optional[str] = None,
@@ -69,12 +80,25 @@ class EvidenceService:
     ) -> Optional[Evidence]:
         """
         Capture current frame and bounding box crop for UNKNOWN or FLAGGED detection.
-        Saves JPEG images to backend/evidence/ and records row in SQLite database.
+        Saves JPEG images asynchronously and records row in SQLite database.
         """
         if status.upper() == "KNOWN":
             return None  # Known person/vehicle NEVER captures evidence
 
-        dedupe_key = plate_number or person_id or (f"track_{bbox.get('track_id')}" if bbox and "track_id" in bbox else "generic")
+        # Deduplication key based on: camera_id + track_id/plate/person_id + event type
+        if track_id is not None:
+            dedupe_key = f"track_{track_id}"
+        elif plate_number:
+            dedupe_key = f"plate_{plate_number.replace(' ', '').upper()}"
+        elif person_id:
+            dedupe_key = f"person_{person_id}"
+        elif bbox and isinstance(bbox, dict) and "track_id" in bbox:
+            dedupe_key = f"track_{bbox['track_id']}"
+        else:
+            bx = int(bbox.get("x1", 0) // 100) if (bbox and isinstance(bbox, dict)) else 0
+            by = int(bbox.get("y1", 0) // 100) if (bbox and isinstance(bbox, dict)) else 0
+            dedupe_key = f"pos_{bx}_{by}"
+
         if not self._should_capture(camera_id, detection_type, dedupe_key):
             return None
 
@@ -86,10 +110,11 @@ class EvidenceService:
             clean_cam = camera_id.replace(":", "-").replace("/", "-")
             det_tag = f"{detection_type}_{status.lower()}"
 
-            # 1. Save Full Frame
+            # 1. Asynchronously Save Full Frame
             full_filename = f"{clean_cam}_{ts_compact}_{det_tag}_{short_id}.jpg"
             full_path = self.evidence_dir / full_filename
-            cv2.imwrite(str(full_path), frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            frame_copy = frame.copy()
+            self._executor.submit(self._save_image_async, full_path, frame_copy, 85)
 
             # 2. Save Crop Image if valid bbox is provided
             crop_filename: Optional[str] = None
@@ -111,11 +136,11 @@ class EvidenceService:
                     cx2 = min(frame.shape[1], x2 + pad_x)
                     cy2 = min(frame.shape[0], y2 + pad_y)
 
-                    cropped_img = frame[cy1:cy2, cx1:cx2]
+                    cropped_img = frame[cy1:cy2, cx1:cx2].copy()
                     if cropped_img.size > 0:
                         crop_filename = f"{clean_cam}_{ts_compact}_{det_tag}_{short_id}_crop.jpg"
                         crop_path = self.evidence_dir / crop_filename
-                        cv2.imwrite(str(crop_path), cropped_img, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                        self._executor.submit(self._save_image_async, crop_path, cropped_img, 90)
 
             # 3. Persist row in DB
             image_url_path = f"/evidence/{full_filename}"
